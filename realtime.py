@@ -9,16 +9,19 @@ import time
 import pyaudio
 import socks
 import websocket
+from dotenv import load_dotenv
+
 
 # Set up SOCKS5 proxy
 socket.socket = socks.socksocket
 
 # Use the provided OpenAI API key and URL
+load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     raise ValueError("API key is missing. Please set the 'OPENAI_API_KEY' environment variable.")
 
-WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01'
+WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17'
 
 CHUNK_SIZE = 1024
 RATE = 24000
@@ -32,6 +35,9 @@ stop_event = threading.Event()
 mic_on_at = 0
 mic_active = None
 REENGAGE_DELAY_MS = 500
+
+# Add this near the top of the file with other global variables
+conversation_history = []
 
 # Function to clear the audio buffer
 def clear_audio_buffer():
@@ -49,20 +55,26 @@ def stop_audio_playback():
 def mic_callback(in_data, frame_count, time_info, status):
     global mic_on_at, mic_active
 
-    if mic_active != True:
-        print('🎙️🟢 Mic active')
-        mic_active = True
-    mic_queue.put(in_data)
-
-    # if time.time() > mic_on_at:
-    #     if mic_active != True:
-    #         print('🎙️🟢 Mic active')
-    #         mic_active = True
-    #     mic_queue.put(in_data)
-    # else:
-    #     if mic_active != False:
-    #         print('🎙️🔴 Mic suppressed')
-    #         mic_active = False
+    # Always check the audio level to detect if user is speaking
+    audio_level = max(abs(int.from_bytes(in_data[i:i+2], byteorder='little', signed=True)) 
+                     for i in range(0, len(in_data), 2))
+    
+    # If audio level is above threshold, consider it user speech and enable mic
+    if audio_level > 1000:  # Adjust this threshold as needed
+        if mic_active != True:
+            print('🎙️🟢 Mic active (user speaking)')
+            mic_active = True
+        mic_queue.put(in_data)
+    # Otherwise, use the time-based suppression
+    elif time.time() > mic_on_at:
+        if mic_active != True:
+            print('🎙️🟢 Mic active')
+            mic_active = True
+        mic_queue.put(in_data)
+    else:
+        if mic_active != False:
+            print('🎙️🔴 Mic suppressed')
+            mic_active = False
 
     return (None, pyaudio.paContinue)
 
@@ -106,7 +118,7 @@ def speaker_callback(in_data, frame_count, time_info, status):
 
 # Function to receive audio data from the WebSocket and process events
 def receive_audio_from_websocket(ws):
-    global audio_buffer
+    global audio_buffer, conversation_history
 
     try:
         while not stop_event.is_set():
@@ -140,6 +152,22 @@ def receive_audio_from_websocket(ws):
                 elif event_type == 'response.function_call_arguments.done':
                     handle_function_call(message,ws)
 
+                elif event_type == 'conversation.item.input_audio_transcription.completed':
+                    user_transcript = message["transcript"]
+                    conversation_history.append(("User", user_transcript))
+                    print(f'\n🗣️ User: {user_transcript}')
+
+                elif event_type == 'response.audio_transcript.done':
+                    ai_transcript = message["transcript"]
+                    conversation_history.append(("AI", ai_transcript))
+                    print(f'🤖 AI: {ai_transcript}')
+
+                # Print conversation history after each new message
+                if event_type in ['conversation.item.input_audio_transcription.completed', 'response.audio_transcript.done']:
+                    print("\n📝 Conversation History:")
+                    for speaker, text in conversation_history:
+                        print(f"{speaker}: {text}")
+                    print()  # Empty line for readability
 
             except Exception as e:
                 print(f'Error receiving audio: {e}')
