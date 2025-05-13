@@ -1,3 +1,0 @@
-pyaudio
-pysocks
-websocket-client
