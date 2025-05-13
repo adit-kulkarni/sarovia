@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import ConversationArea from './components/ConversationArea';
 import StartButton from './components/StartButton';
+import { audioService } from './services/audioService';
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -20,9 +21,44 @@ function App() {
     }
   ]);
 
-  const handleToggleRecording = () => {
-    setIsRecording(!isRecording);
-    // TODO: Implement WebSocket connection and audio handling
+  useEffect(() => {
+    // Connect to WebSocket server when component mounts
+    audioService.connect();
+
+    // Listen for new transcripts
+    const handleNewTranscript = (event) => {
+      const { speaker, text } = event.detail;
+      setMessages(prev => [...prev, { speaker, text }]);
+    };
+
+    window.addEventListener('newTranscript', handleNewTranscript);
+
+    // Cleanup on unmount
+    return () => {
+      window.removeEventListener('newTranscript', handleNewTranscript);
+      audioService.disconnect();
+    };
+  }, []);
+
+  const handleToggleRecording = async () => {
+    try {
+      if (!isRecording) {
+        console.log('Starting recording...');
+        await audioService.startRecording((audioData) => {
+          console.log('Sending audio data to server:', audioData);
+          if (audioService.socket) {
+            audioService.socket.emit('audio', audioData);
+          }
+        });
+      } else {
+        console.log('Stopping recording...');
+        audioService.stopRecording();
+      }
+      setIsRecording(!isRecording);
+    } catch (error) {
+      console.error('Error toggling recording:', error);
+      // Handle error (e.g., show error message to user)
+    }
   };
 
   return (
