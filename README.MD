@@ -1,3 +1,58 @@
+# OpenAI Realtime API Demo
+
+This is a Python application that demonstrates the use of OpenAI's Realtime API for voice conversations. The application allows for real-time voice interaction with an AI assistant, with features like:
+
+- Real-time voice input and output
+- Conversation history tracking
+- Function calling capabilities
+- Automatic feedback loop prevention
+
+## Setup
+
+1. Create a virtual environment:
+```bash
+python3 -m venv venv
+```
+
+2. Activate the virtual environment:
+```bash
+source venv/bin/activate  # On macOS/Linux
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Create a `.env` file in the project root and add your OpenAI API key:
+```
+OPENAI_API_KEY=your_api_key_here
+```
+
+## Running the Application
+
+1. Make sure your virtual environment is activated
+2. Run the application:
+```bash
+python realtime.py
+```
+
+## Features
+
+- Real-time voice conversation with AI
+- Automatic transcription of both user and AI speech
+- Conversation history tracking
+- Function calling support (weather, notepad)
+- Feedback loop prevention during AI speech
+
+## Requirements
+
+- Python 3.9+
+- PyAudio
+- WebSocket client
+- PySocks
+- OpenAI API key
+
 - **Initialize Audio Interface**
 
   - Use `pyaudio.PyAudio()` to create the `p` audio interface, managing both microphone and speaker audio streams.
@@ -33,7 +88,7 @@
     connect_to_openai()
     ```
 
-     function initiates a WebSocket connection with OpenAI’s API for real-time data exchange. This function spawns two threads:
+     function initiates a WebSocket connection with OpenAI's API for real-time data exchange. This function spawns two threads:
 
     - **Send Microphone Audio**: `send_mic_audio_to_websocket` pulls audio data from `mic_queue`, encodes it in base64, and sends it via WebSocket in the `input_audio_buffer.append` format.
     - **Receive Audio and Responses**: `receive_audio_from_websocket` listens for WebSocket messages from OpenAI, handling responses based on message `type`.
@@ -47,20 +102,4 @@
       - `stop_audio_playback()` to halt the speaker stream, ensuring only new audio data is played.
     - **`response.audio.delta`**: Contains audio data in the `delta` field, encoded in base64. This data is decoded and appended to `audio_buffer`, where `speaker_callback` can access it for real-time playback.
     - **`response.audio.done`**: Marks the end of the AI's audio response, signaling that no further audio data for the current response will be received.
-    - **`response.function_call_arguments.done`**: Indicates the AI’s request for a function call. The `handle_function_call` function decodes the request arguments, performs the specified action (such as `get_weather`), and returns the result to the AI using `send_function_call_result()`.
-
-  **Send Session Configuration Updates**
-
-  - `send_fc_session_update()` configures specific session parameters, such as the AI's tone, speaking speed, language, and audio format. This ensures the WebSocket session maintains the desired interaction behavior and settings.
-
-  **Keep Audio Streams Active**
-
-  - The main loop continuously checks the activity status of both audio streams (`mic_stream` and `speaker_stream`). It uses `is_active()` to confirm both are running, with a 0.1-second pause in each loop cycle to conserve resources.
-
-  **Exception Handling and Interrupt Monitoring**
-
-  - If a `KeyboardInterrupt` is detected, `stop_event` is set, safely signaling all threads to terminate audio streaming and WebSocket communication.
-
-  **Shutdown and Release Resources**
-
-  - The `finally` block handles stream closure and WebSocket disconnection. `mic_stream` and `speaker_stream` are stopped and closed via `stop_stream()` and `close()`, while `p.terminate()` releases the `PyAudio` resources.
+    - **`response.function_call_arguments.done`**: Indicates the AI's request for a function call. The `handle_function_call` function decodes the request arguments, performs the specified action (such as `
