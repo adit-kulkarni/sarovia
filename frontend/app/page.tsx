@@ -2,25 +2,52 @@
 
 import { useEffect, useState, useRef } from 'react';
 
+interface Message {
+  type: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  isStreaming?: boolean;
+}
+
 export default function Home() {
   const [backendStatus, setBackendStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [openaiStatus, setOpenaiStatus] = useState<'disconnected' | 'connected'>('disconnected');
-  const [messages, setMessages] = useState<string[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [assistantResponse, setAssistantResponse] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentStreamingMessageRef = useRef<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<Int16Array[]>([]);
   const isPlayingRef = useRef(false);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Scroll to bottom of messages
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   // Initialize AudioContext
   const initAudioContext = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
     }
+  };
+
+  // Function to stop audio playback
+  const stopAudioPlayback = () => {
+    if (currentSourceRef.current) {
+      currentSourceRef.current.stop();
+      currentSourceRef.current = null;
+    }
+    isPlayingRef.current = false;
+    audioBufferRef.current = []; // Clear the buffer
   };
 
   // Function to play next chunk in buffer
@@ -48,11 +75,13 @@ export default function Home() {
 
       // Create source and play
       const source = audioContextRef.current.createBufferSource();
+      currentSourceRef.current = source;
       source.buffer = audioBuffer;
       source.connect(audioContextRef.current.destination);
 
       // Set up the onended handler before starting
       source.onended = () => {
+        currentSourceRef.current = null;
         isPlayingRef.current = false;
         // Play next chunk if available
         if (audioBufferRef.current.length > 0) {
@@ -78,23 +107,34 @@ export default function Home() {
 
     wsRef.current.onopen = () => {
       setBackendStatus('connected');
-      setMessages(prev => [...prev, 'Connected to backend WebSocket']);
+      setMessages(prev => [...prev, {
+        type: 'assistant' as const,
+        content: 'Connected to backend WebSocket',
+        timestamp: new Date()
+      }]);
       initAudioContext();
     };
 
     wsRef.current.onclose = () => {
       setBackendStatus('disconnected');
-      setMessages(prev => [...prev, 'Disconnected from backend WebSocket']);
+      setMessages(prev => [...prev, {
+        type: 'assistant' as const,
+        content: 'Disconnected from backend WebSocket',
+        timestamp: new Date()
+      }]);
     };
 
     wsRef.current.onerror = (error) => {
       setBackendStatus('disconnected');
-      setMessages(prev => [...prev, `WebSocket error: ${error}`]);
+      setMessages(prev => [...prev, {
+        type: 'assistant' as const,
+        content: `WebSocket error: ${error}`,
+        timestamp: new Date()
+      }]);
     };
 
     wsRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setMessages(prev => [...prev, `Received: ${JSON.stringify(data)}`]);
       
       // Handle different message types
       switch (data.type) {
@@ -102,10 +142,57 @@ export default function Home() {
           setOpenaiStatus('connected');
           break;
         case 'conversation.item.input_audio_transcription.completed':
-          setTranscript(data.transcript);
+          setMessages(prev => [...prev, {
+            type: 'user' as const,
+            content: data.transcript,
+            timestamp: new Date()
+          }]);
+          break;
+        case 'response.audio_transcript.delta':
+          // Handle streaming transcript
+          if (currentStreamingMessageRef.current === null) {
+            // Start new streaming message
+            setMessages(prev => {
+              const newMessages = [...prev, {
+                type: 'assistant' as const,
+                content: data.delta,
+                timestamp: new Date(),
+                isStreaming: true
+              }];
+              currentStreamingMessageRef.current = newMessages.length - 1;
+              return newMessages;
+            });
+          } else {
+            // Update existing streaming message
+            setMessages(prev => {
+              const newMessages = [...prev];
+              const currentMessage = newMessages[currentStreamingMessageRef.current!];
+              newMessages[currentStreamingMessageRef.current!] = {
+                ...currentMessage,
+                content: currentMessage.content + data.delta
+              };
+              return newMessages;
+            });
+          }
           break;
         case 'response.audio_transcript.done':
-          setAssistantResponse(data.transcript);
+          // Finalize streaming message
+          if (currentStreamingMessageRef.current !== null) {
+            setMessages(prev => {
+              const newMessages = [...prev];
+              const currentMessage = newMessages[currentStreamingMessageRef.current!];
+              newMessages[currentStreamingMessageRef.current!] = {
+                ...currentMessage,
+                isStreaming: false
+              };
+              return newMessages;
+            });
+            currentStreamingMessageRef.current = null;
+          }
+          break;
+        case 'input_audio_buffer.speech_started':
+          // Stop AI audio playback when user starts speaking
+          stopAudioPlayback();
           break;
         case 'response.audio.delta':
           // Handle audio data
@@ -122,7 +209,11 @@ export default function Home() {
           }
           break;
         case 'error':
-          setMessages(prev => [...prev, `Error: ${data.error.message}`]);
+          setMessages(prev => [...prev, {
+            type: 'assistant' as const,
+            content: `Error: ${data.error.message}`,
+            timestamp: new Date()
+          }]);
           break;
       }
     };
@@ -134,6 +225,7 @@ export default function Home() {
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
+      stopAudioPlayback();
     };
   }, []);
 
@@ -186,10 +278,18 @@ export default function Home() {
       processor.connect(audioContextRef.current.destination);
 
       setIsRecording(true);
-      setMessages(prev => [...prev, 'Started recording']);
+      setMessages(prev => [...prev, {
+        type: 'assistant' as const,
+        content: 'Started recording',
+        timestamp: new Date()
+      }]);
     } catch (error) {
       console.error('Error starting recording:', error);
-      setMessages(prev => [...prev, `Error starting recording: ${error}`]);
+      setMessages(prev => [...prev, {
+        type: 'assistant' as const,
+        content: `Error starting recording: ${error}`,
+        timestamp: new Date()
+      }]);
     }
   };
 
@@ -199,74 +299,92 @@ export default function Home() {
       audioContextRef.current = null;
     }
     setIsRecording(false);
-    setMessages(prev => [...prev, 'Stopped recording']);
+    setMessages(prev => [...prev, {
+      type: 'assistant' as const,
+      content: 'Stopped recording',
+      timestamp: new Date()
+    }]);
   };
 
   return (
-    <main className="min-h-screen p-8">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-4">Voice Chat Demo</h1>
-        
-        <div className="space-y-4">
-          {/* Connection Status */}
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <div className={`w-3 h-3 rounded-full ${
-                backendStatus === 'connected' ? 'bg-green-500' : 
-                backendStatus === 'connecting' ? 'bg-yellow-500' : 
-                'bg-red-500'
-              }`} />
-              <span>Backend: {backendStatus}</span>
+    <main className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto p-2 sm:p-4">
+        <div className="bg-white rounded-lg shadow-lg overflow-hidden h-[100vh] flex flex-col">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-4">
+            <h1 className="text-xl sm:text-2xl font-bold">Voice Chat Demo</h1>
+            <div className="flex items-center space-x-4 mt-2">
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${
+                  backendStatus === 'connected' ? 'bg-green-400' : 
+                  backendStatus === 'connecting' ? 'bg-yellow-400' : 
+                  'bg-red-400'
+                }`} />
+                <span className="text-xs sm:text-sm">Backend: {backendStatus}</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${
+                  openaiStatus === 'connected' ? 'bg-green-400' : 'bg-red-400'
+                }`} />
+                <span className="text-xs sm:text-sm">OpenAI: {openaiStatus}</span>
+              </div>
             </div>
+          </div>
 
-            <div className="flex items-center space-x-2">
-              <div className={`w-3 h-3 rounded-full ${
-                openaiStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'
-              }`} />
-              <span>OpenAI: {openaiStatus}</span>
-            </div>
+          {/* Chat Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+            {messages.map((message, index) => (
+              <div
+                key={index}
+                className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-3 ${
+                    message.type === 'user'
+                      ? 'bg-blue-500 text-white rounded-br-none'
+                      : 'bg-yellow-100 text-gray-800 rounded-bl-none'
+                  }`}
+                >
+                  <p className="text-sm sm:text-base leading-relaxed">
+                    {message.content}
+                    {message.isStreaming && (
+                      <span className="inline-block w-2 h-4 ml-1 bg-gray-400 animate-pulse" />
+                    )}
+                  </p>
+                  <span className="text-[10px] sm:text-xs opacity-70 mt-1 block">
+                    {message.timestamp.toLocaleTimeString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Recording Controls */}
-          <div className="flex justify-center space-x-4">
-            <button
-              onClick={isRecording ? stopRecording : startRecording}
-              className={`px-4 py-2 rounded-lg ${
-                isRecording 
-                  ? 'bg-red-500 hover:bg-red-600' 
-                  : 'bg-blue-500 hover:bg-blue-600'
-              } text-white transition-colors`}
-            >
-              {isRecording ? 'Stop Recording' : 'Start Recording'}
-            </button>
-          </div>
-
-          {/* Transcripts */}
-          <div className="space-y-4">
-            {transcript && (
-              <div className="bg-gray-100 p-4 rounded-lg">
-                <h3 className="font-semibold mb-2">Your Message:</h3>
-                <p>{transcript}</p>
-              </div>
-            )}
-            
-            {assistantResponse && (
-              <div className="bg-blue-100 p-4 rounded-lg">
-                <h3 className="font-semibold mb-2">Assistant:</h3>
-                <p>{assistantResponse}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Debug Messages */}
-          <div className="mt-8">
-            <h2 className="text-xl font-semibold mb-2">Debug Messages:</h2>
-            <div className="bg-gray-100 p-4 rounded-lg h-96 overflow-y-auto">
-              {messages.map((msg, index) => (
-                <div key={index} className="mb-2 text-sm">
-                  {msg}
-                </div>
-              ))}
+          <div className="border-t p-4 bg-white">
+            <div className="flex justify-center">
+              <button
+                onClick={isRecording ? stopRecording : startRecording}
+                className={`px-4 sm:px-6 py-2 sm:py-3 rounded-full font-semibold transition-all transform hover:scale-105 ${
+                  isRecording 
+                    ? 'bg-red-500 hover:bg-red-600 text-white' 
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                }`}
+              >
+                {isRecording ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2 h-2 sm:w-3 sm:h-3 bg-white rounded-full animate-pulse" />
+                    <span className="text-sm sm:text-base">Stop Recording</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                    <span className="text-sm sm:text-base">Start Recording</span>
+                  </div>
+                )}
+              </button>
             </div>
           </div>
         </div>
