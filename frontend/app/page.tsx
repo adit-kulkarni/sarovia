@@ -307,86 +307,68 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto p-2 sm:p-4">
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden h-[100vh] flex flex-col">
-          {/* Header */}
-          <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-4">
-            <h1 className="text-xl sm:text-2xl font-bold">Voice Chat Demo</h1>
-            <div className="flex items-center space-x-4 mt-2">
-              <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${
-                  backendStatus === 'connected' ? 'bg-green-400' : 
-                  backendStatus === 'connecting' ? 'bg-yellow-400' : 
-                  'bg-red-400'
-                }`} />
-                <span className="text-xs sm:text-sm">Backend: {backendStatus}</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${
-                  openaiStatus === 'connected' ? 'bg-green-400' : 'bg-red-400'
-                }`} />
-                <span className="text-xs sm:text-sm">OpenAI: {openaiStatus}</span>
-              </div>
-            </div>
+    <main className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center">
+      <div className="w-full max-w-md mx-auto flex flex-col h-[90vh] rounded-3xl shadow-xl border border-orange-100 bg-white/80 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 bg-white/90 border-b border-orange-100">
+          <div className="w-10 h-10 rounded-full bg-orange-200 flex items-center justify-center text-lg font-bold text-orange-700">
+            AI
           </div>
+          <div>
+            <h1 className="text-lg font-semibold text-gray-800">Voice Assistant</h1>
+            <p className="text-sm text-gray-500">
+              {backendStatus === 'connected' ? 'Connected' : 'Disconnected'}
+            </p>
+          </div>
+        </div>
 
-          {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-            {messages.map((message, index) => (
+        {/* Messages Container */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((message, index) => (
+            <div
+              key={index}
+              className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
               <div
-                key={index}
-                className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-3 ${
-                    message.type === 'user'
-                      ? 'bg-blue-500 text-white rounded-br-none'
-                      : 'bg-yellow-100 text-gray-800 rounded-bl-none'
-                  }`}
-                >
-                  <p className="text-sm sm:text-base leading-relaxed">
-                    {message.content}
-                    {message.isStreaming && (
-                      <span className="inline-block w-2 h-4 ml-1 bg-gray-400 animate-pulse" />
-                    )}
-                  </p>
-                  <span className="text-[10px] sm:text-xs opacity-70 mt-1 block">
-                    {message.timestamp.toLocaleTimeString()}
-                  </span>
-                </div>
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Recording Controls */}
-          <div className="border-t p-4 bg-white">
-            <div className="flex justify-center">
-              <button
-                onClick={isRecording ? stopRecording : startRecording}
-                className={`px-4 sm:px-6 py-2 sm:py-3 rounded-full font-semibold transition-all transform hover:scale-105 ${
-                  isRecording 
-                    ? 'bg-red-500 hover:bg-red-600 text-white' 
-                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                  message.type === 'user'
+                    ? 'bg-orange-500 text-white rounded-br-none'
+                    : 'bg-gray-100 text-gray-800 rounded-bl-none'
                 }`}
               >
-                {isRecording ? (
-                  <div className="flex items-center space-x-2">
-                    <div className="w-2 h-2 sm:w-3 sm:h-3 bg-white rounded-full animate-pulse" />
-                    <span className="text-sm sm:text-base">Stop Recording</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center space-x-2">
-                    <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                    <span className="text-sm sm:text-base">Start Recording</span>
-                  </div>
-                )}
-              </button>
+                <p className="text-sm">{message.content}</p>
+                <span className="text-xs opacity-70 mt-1 block">
+                  {message.timestamp.toLocaleTimeString()}
+                </span>
+              </div>
             </div>
-          </div>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Controls */}
+        <div className="p-4 border-t border-orange-100 bg-white/90">
+          {backendStatus === 'connected' ? (
+            <button
+              onClick={isRecording ? stopRecording : startRecording}
+              className={`w-full py-3 px-4 rounded-xl font-medium transition-all ${
+                isRecording
+                  ? 'bg-red-500 hover:bg-red-600 text-white'
+                  : 'bg-orange-500 hover:bg-orange-600 text-white'
+              }`}
+            >
+              {isRecording ? 'Stop Recording' : 'Start Recording'}
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                wsRef.current = new WebSocket('ws://localhost:8000/ws');
+              }}
+              className="w-full py-3 px-4 rounded-xl font-medium bg-orange-500 hover:bg-orange-600 text-white transition-all"
+            >
+              Start Conversation
+            </button>
+          )}
         </div>
       </div>
     </main>
