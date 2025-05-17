@@ -14,6 +14,7 @@ export default function Home() {
   const [openaiStatus, setOpenaiStatus] = useState<'disconnected' | 'connected'>('disconnected');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [selectedLevel, setSelectedLevel] = useState('A1');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentStreamingMessageRef = useRef<number | null>(null);
 
@@ -107,6 +108,11 @@ export default function Home() {
 
     wsRef.current.onopen = () => {
       setBackendStatus('connected');
+      // Send initial level selection
+      wsRef.current?.send(JSON.stringify({
+        type: 'session.init',
+        level: selectedLevel
+      }));
       setMessages(prev => [...prev, {
         type: 'assistant' as const,
         content: 'Connected to backend WebSocket',
@@ -310,15 +316,20 @@ export default function Home() {
     <main className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center">
       <div className="w-full max-w-md mx-auto flex flex-col h-[90vh] rounded-3xl shadow-xl border border-orange-100 bg-white/80 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 bg-white/90 border-b border-orange-100">
-          <div className="w-10 h-10 rounded-full bg-orange-200 flex items-center justify-center text-lg font-bold text-orange-700">
-            AI
+        <div className="flex items-center justify-between px-4 py-3 bg-white/90 border-b border-orange-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-orange-200 flex items-center justify-center text-lg font-bold text-orange-700">
+              AI
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-gray-800">Voice Assistant</h1>
+              <p className="text-sm text-gray-500">
+                {backendStatus === 'connected' ? 'Connected' : 'Disconnected'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-lg font-semibold text-gray-800">Voice Assistant</h1>
-            <p className="text-sm text-gray-500">
-              {backendStatus === 'connected' ? 'Connected' : 'Disconnected'}
-            </p>
+          <div className="text-sm font-medium text-orange-600">
+            Level: {selectedLevel}
           </div>
         </div>
 
@@ -349,16 +360,30 @@ export default function Home() {
         {/* Controls */}
         <div className="p-4 border-t border-orange-100 bg-white/90">
           {backendStatus === 'connected' ? (
-            <button
-              onClick={isRecording ? stopRecording : startRecording}
-              className={`w-full py-3 px-4 rounded-xl font-medium transition-all ${
-                isRecording
-                  ? 'bg-red-500 hover:bg-red-600 text-white'
-                  : 'bg-orange-500 hover:bg-orange-600 text-white'
-              }`}
-            >
-              {isRecording ? 'Stop Recording' : 'Start Recording'}
-            </button>
+            <div className="flex gap-2">
+              <select
+                value={selectedLevel}
+                onChange={(e) => setSelectedLevel(e.target.value)}
+                className="py-3 px-4 rounded-xl font-medium bg-white border border-orange-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                <option value="A1">A1</option>
+                <option value="A2">A2</option>
+                <option value="B1">B1</option>
+                <option value="B2">B2</option>
+                <option value="C1">C1</option>
+                <option value="C2">C2</option>
+              </select>
+              <button
+                onClick={isRecording ? stopRecording : startRecording}
+                className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+                  isRecording
+                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                    : 'bg-orange-500 hover:bg-orange-600 text-white'
+                }`}
+              >
+                {isRecording ? 'Stop Recording' : 'Start Recording'}
+              </button>
+            </div>
           ) : (
             <button
               onClick={() => {
