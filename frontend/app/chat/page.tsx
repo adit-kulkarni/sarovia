@@ -19,9 +19,20 @@ const contextTitles: { [key: string]: string } = {
   city: 'Finding Things to Do in the City'
 };
 
+const languageNames: { [key: string]: string } = {
+  en: 'English',
+  it: 'Italian',
+  es: 'Spanish',
+  pt: 'Portuguese',
+  fr: 'French',
+  de: 'German',
+  kn: 'Kannada'
+};
+
 export default function Chat() {
   const searchParams = useSearchParams();
   const context = searchParams.get('context') || 'restaurant';
+  const language = searchParams.get('language') || 'en';
   
   const [backendStatus, setBackendStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [openaiStatus, setOpenaiStatus] = useState<'disconnected' | 'connected'>('disconnected');
@@ -121,15 +132,16 @@ export default function Chat() {
 
     wsRef.current.onopen = () => {
       setBackendStatus('connected');
-      // Send initial level and context selection
+      // Send initial level, context, and language selection
       wsRef.current?.send(JSON.stringify({
         type: 'session.init',
         level: selectedLevel,
-        context: context
+        context: context,
+        language: language
       }));
       setMessages(prev => [...prev, {
         type: 'assistant' as const,
-        content: 'Connected to backend WebSocket',
+        content: `Connected to backend WebSocket. Starting ${languageNames[language]} conversation practice.`,
         timestamp: new Date()
       }]);
       initAudioContext();
@@ -247,7 +259,7 @@ export default function Chat() {
       }
       stopAudioPlayback();
     };
-  }, [context, selectedLevel]);
+  }, [context, selectedLevel, language]);
 
   const startRecording = async () => {
     try {

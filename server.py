@@ -15,6 +15,17 @@ if not API_KEY:
 
 WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17'
 
+# Language configuration
+LANGUAGES = {
+    'en': 'English',
+    'it': 'Italian',
+    'es': 'Spanish',
+    'pt': 'Portuguese',
+    'fr': 'French',
+    'de': 'German',
+    'kn': 'Kannada'
+}
+
 app = FastAPI()
 
 # Add CORS middleware
@@ -51,11 +62,11 @@ async def forward_to_openai(ws: websockets.WebSocketClientProtocol, message: dic
     except Exception as e:
         print(f"Error forwarding to OpenAI: {e}")
 
-def get_context_specific_instructions(context: str) -> str:
+def get_context_specific_instructions(context: str, language: str) -> str:
     """Generate context-specific instructions for the AI"""
     context_guidelines = {
         "restaurant": (
-            "You are a Spanish restaurant server. Your role is to:\n"
+            f"You are a {LANGUAGES[language]} restaurant server. Your role is to:\n"
             "- Take orders and make recommendations\n"
             "- Handle special requests and dietary restrictions\n"
             "- Maintain a friendly and professional demeanor\n"
@@ -64,7 +75,7 @@ def get_context_specific_instructions(context: str) -> str:
             "- Suggest dishes and drinks when appropriate"
         ),
         "drinks": (
-            "You are a potential date at a bar. Your role is to:\n"
+            f"You are a potential date at a {LANGUAGES[language]} bar. Your role is to:\n"
             "- Show interest in the conversation\n"
             "- Respond to advances appropriately\n"
             "- Share your interests and experiences\n"
@@ -73,7 +84,7 @@ def get_context_specific_instructions(context: str) -> str:
             "- Suggest activities or topics to discuss"
         ),
         "introduction": (
-            "You are a new acquaintance. Your role is to:\n"
+            f"You are a new acquaintance in {LANGUAGES[language]}. Your role is to:\n"
             "- Be friendly and approachable\n"
             "- Share basic information about yourself\n"
             "- Show interest in the other person\n"
@@ -82,7 +93,7 @@ def get_context_specific_instructions(context: str) -> str:
             "- Ask relevant follow-up questions"
         ),
         "market": (
-            "You are a market vendor. Your role is to:\n"
+            f"You are a {LANGUAGES[language]} market vendor. Your role is to:\n"
             "- Describe your products and their qualities\n"
             "- Negotiate prices appropriately\n"
             "- Maintain a business relationship\n"
@@ -91,7 +102,7 @@ def get_context_specific_instructions(context: str) -> str:
             "- Explain the value of your products"
         ),
         "karaoke": (
-            "You are a friend at a karaoke night. Your role is to:\n"
+            f"You are a friend at a {LANGUAGES[language]} karaoke night. Your role is to:\n"
             "- Encourage participation\n"
             "- Share enthusiasm for music\n"
             "- Maintain a fun atmosphere\n"
@@ -100,7 +111,7 @@ def get_context_specific_instructions(context: str) -> str:
             "- Share experiences and preferences"
         ),
         "city": (
-            "You are a local resident/tour guide. Your role is to:\n"
+            f"You are a local resident/tour guide in a {LANGUAGES[language]} city. Your role is to:\n"
             "- Share knowledge about the city\n"
             "- Make personalized recommendations\n"
             "- Consider the visitor's interests\n"
@@ -111,7 +122,7 @@ def get_context_specific_instructions(context: str) -> str:
     }
     return context_guidelines.get(context, context_guidelines["restaurant"])
 
-def get_level_specific_instructions(level: str, context: str) -> str:
+def get_level_specific_instructions(level: str, context: str, language: str) -> str:
     """Generate level-specific instructions for the AI"""
     level_guidelines = {
         "A1": "Use basic vocabulary and present tense only. Speak slowly and clearly. Use simple sentences. Provide frequent English support.",
@@ -123,8 +134,8 @@ def get_level_specific_instructions(level: str, context: str) -> str:
     }
     
     base_instructions = (
-        "You are a Spanish language tutor. Your primary goal is to help students learn Spanish through natural conversation. "
-        "Speak primarily in Spanish, using English only when necessary for explanations. Maintain a patient, encouraging, and supportive tone throughout the conversation.\n\n"
+        f"You are a {LANGUAGES[language]} language tutor. Your primary goal is to help students learn {LANGUAGES[language]} through natural conversation. "
+        "Speak primarily in the target language, using English only when necessary for explanations. Maintain a patient, encouraging, and supportive tone throughout the conversation.\n\n"
         "When interacting with students:\n"
         "- Identify and correct errors in grammar (verb conjugations, gender agreement), vocabulary (word choice, idioms), pronunciation, and sentence structure\n"
         "- Provide immediate but non-disruptive corrections\n"
@@ -139,11 +150,11 @@ def get_level_specific_instructions(level: str, context: str) -> str:
         "- Use appropriate examples to illustrate corrections\n\n"
         f"STUDENT LEVEL: {level}\n"
         f"Level-specific guidelines: {level_guidelines.get(level, level_guidelines['A1'])}\n\n"
-        f"CONVERSATION CONTEXT:\n{get_context_specific_instructions(context)}"
+        f"CONVERSATION CONTEXT:\n{get_context_specific_instructions(context, language)}"
     )
     return base_instructions
 
-async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str):
+async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str):
     """Handle responses from OpenAI and forward to client"""
     try:
         while True:
@@ -164,7 +175,7 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                 session_config = {
                     "type": "session.update",
                     "session": {
-                        "instructions": get_level_specific_instructions(level, context),
+                        "instructions": get_level_specific_instructions(level, context, language),
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.5,
@@ -179,7 +190,7 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                         "output_audio_format": "pcm16",
                         "input_audio_transcription": {
                             "model": "whisper-1",
-                            "language": "es"
+                            "language": language
                         }
                     }
                 }
@@ -194,14 +205,16 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    # Get the level and context from the client's initial message
+    # Get the level, context, and language from the client's initial message
     try:
         initial_data = await websocket.receive_json()
         level = initial_data.get('level', 'A1')  # Default to A1 if not specified
         context = initial_data.get('context', 'restaurant')  # Default to restaurant if not specified
+        language = initial_data.get('language', 'en')  # Default to English if not specified
     except:
         level = 'A1'  # Default to A1 if there's any error
         context = 'restaurant'  # Default to restaurant if there's any error
+        language = 'en'  # Default to English if there's any error
     
     # Connect to OpenAI
     openai_ws = await connect_to_openai()
@@ -210,7 +223,7 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     # Start handling OpenAI responses in a separate task
-    openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context))
+    openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
 
     try:
         while True:
