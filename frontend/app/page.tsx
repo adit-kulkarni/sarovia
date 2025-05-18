@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useUser } from './hooks/useUser';
+import Auth from './Auth';
 
 interface LanguageCard {
   code: string;
@@ -69,6 +71,11 @@ export default function Home() {
   const router = useRouter();
   const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
   const [selectedContext, setSelectedContext] = useState<string | null>(null);
+  const user = useUser();
+
+  if (!user) {
+    return <Auth />;
+  }
 
   const handleLanguageSelect = (languageCode: string) => {
     setSelectedLanguage(languageCode);

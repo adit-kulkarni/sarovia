@@ -6,9 +6,17 @@ import asyncio
 import websockets
 import os
 from dotenv import load_dotenv
+from supabase import create_client
+import os
+
+
 
 # Load environment variables
 load_dotenv()
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_SERVICE_KEY")
+supabase = create_client(url, key)
+
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     raise ValueError("API key is missing. Please set the 'OPENAI_API_KEY' environment variable.")
