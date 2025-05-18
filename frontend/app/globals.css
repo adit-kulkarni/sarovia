@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -7,7 +9,8 @@
   --background-rgb: 249, 250, 251;
 }
 
-body {
+html, body {
+  @apply font-sans;
   color: rgb(var(--foreground-rgb));
   background: rgb(var(--background-rgb));
 }
@@ -28,4 +31,9 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+/* Optionally, apply Nunito Sans to all elements for extra consistency */
+* {
+  font-family: inherit;
 } 
