@@ -42,6 +42,7 @@ export default function Auth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [guestLoading, setGuestLoading] = useState(false);
 
   const handleSignUp = async () => {
     setError(null);
@@ -69,6 +70,17 @@ export default function Auth() {
       setError(error.message);
     }
     setLoading(false);
+  };
+
+  const handleGuestSignIn = async () => {
+    setError(null);
+    setSuccess(null);
+    setGuestLoading(true);
+    const { error } = await supabase.auth.signInAnonymously();
+    if (error) {
+      setError(error.message);
+    }
+    setGuestLoading(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -155,6 +167,13 @@ export default function Auth() {
           className="w-full bg-white border border-orange-400 text-orange-700 font-semibold py-2 rounded-lg shadow hover:bg-orange-50 transition-all text-lg"
         >
           {mode === 'signup' ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+        </button>
+        <button
+          onClick={handleGuestSignIn}
+          disabled={guestLoading}
+          className="w-full mt-4 bg-orange-100 hover:bg-orange-200 text-orange-700 font-semibold py-2 rounded-lg shadow transition-all text-lg disabled:opacity-60"
+        >
+          {guestLoading ? 'Continuing as Guest...' : 'Continue as Guest'}
         </button>
         {error && <div className="text-red-500 mt-4 text-center">{error}</div>}
         {success && <div className="text-green-600 mt-4 text-center">{success}</div>}

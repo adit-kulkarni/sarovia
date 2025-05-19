@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser } from './hooks/useUser';
 import Auth from './Auth';
+import { supabase } from '../supabaseClient';
 
 interface LanguageCard {
   code: string;
@@ -88,8 +89,21 @@ export default function Home() {
     router.push(`/chat?context=${contextId}&language=${selectedLanguage}`);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.refresh();
+  };
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center p-4">
+    <main className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center p-4 relative">
+      {user && (
+        <button
+          onClick={handleLogout}
+          className="absolute top-4 right-4 bg-orange-100 hover:bg-orange-200 text-orange-700 font-semibold py-2 px-4 rounded-lg shadow transition-all text-sm z-20"
+        >
+          Log Out
+        </button>
+      )}
       <div className="w-full max-w-4xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-800 mb-2">Language Conversation Practice</h1>

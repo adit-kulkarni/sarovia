@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { supabase } from '../../supabaseClient';
 
 interface Message {
   type: 'user' | 'assistant';
@@ -48,6 +49,8 @@ export default function Chat() {
   const audioBufferRef = useRef<Int16Array[]>([]);
   const isPlayingRef = useRef(false);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  const router = useRouter();
 
   // Scroll to bottom of messages
   const scrollToBottom = () => {
@@ -338,8 +341,19 @@ export default function Chat() {
     }]);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.refresh();
+  };
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center">
+    <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center p-4 relative">
+      <button
+        onClick={handleLogout}
+        className="absolute top-4 right-4 bg-orange-100 hover:bg-orange-200 text-orange-700 font-semibold py-2 px-4 rounded-lg shadow transition-all text-sm z-20"
+      >
+        Log Out
+      </button>
       <div className="w-full max-w-md mx-auto flex flex-col h-[90vh] rounded-3xl shadow-xl border border-orange-100 bg-white/80 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-white/90 border-b border-orange-100">
@@ -427,6 +441,6 @@ export default function Chat() {
           )}
         </div>
       </div>
-    </main>
+    </div>
   );
 } 
