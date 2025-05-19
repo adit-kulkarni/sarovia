@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Query
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
@@ -8,6 +8,8 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client
 import os
+import jwt
+import requests
 
 
 
@@ -47,6 +49,30 @@ app.add_middleware(
 
 # Store active connections
 active_connections = {}
+
+SUPABASE_PROJECT_REF = "tobnmxaytsknubdpzpnf"
+SUPABASE_JWT_ISSUER = f"https://{SUPABASE_PROJECT_REF}.supabase.co/auth/v1"
+SUPABASE_JWT_AUDIENCE = SUPABASE_PROJECT_REF
+JWKS_URL = f"{SUPABASE_JWT_ISSUER}/.well-known/jwks.json"
+JWKS = requests.get(JWKS_URL).json()
+
+def get_public_key(token):
+    unverified_header = jwt.get_unverified_header(token)
+    for key in JWKS['keys']:
+        if key['kid'] == unverified_header['kid']:
+            return jwt.algorithms.RSAAlgorithm.from_jwk(key)
+    raise Exception("Public key not found.")
+
+def verify_jwt(token):
+    public_key = get_public_key(token)
+    payload = jwt.decode(
+        token,
+        public_key,
+        algorithms=["RS256"],
+        audience=SUPABASE_JWT_AUDIENCE,
+        issuer=SUPABASE_JWT_ISSUER,
+    )
+    return payload
 
 async def connect_to_openai():
     """Establish WebSocket connection with OpenAI"""
@@ -241,9 +267,15 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
         await ws.close()
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        # You can now use user_id for user-specific logic
+    except Exception as e:
+        await websocket.close()
+        return
     await websocket.accept()
-    
     # Get the level, context, and language from the client's initial message
     try:
         initial_data = await websocket.receive_json()
@@ -254,25 +286,20 @@ async def websocket_endpoint(websocket: WebSocket):
         level = 'A1'  # Default to A1 if there's any error
         context = 'restaurant'  # Default to restaurant if there's any error
         language = 'en'  # Default to English if there's any error
-    
     # Connect to OpenAI
     openai_ws = await connect_to_openai()
     if not openai_ws:
         await websocket.close()
         return
-
     # Start handling OpenAI responses in a separate task
     openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
-
     try:
         while True:
             # Receive message from client
             data = await websocket.receive_json()
-            
             # Forward audio data to OpenAI
             if data.get('type') == 'input_audio_buffer.append':
                 await forward_to_openai(openai_ws, data)
-
     except Exception as e:
         print(f"Error in websocket connection: {e}")
     finally:

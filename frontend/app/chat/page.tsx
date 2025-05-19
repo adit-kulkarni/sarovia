@@ -130,130 +130,134 @@ export default function Chat() {
   };
 
   useEffect(() => {
-    // Initialize WebSocket connection
-    wsRef.current = new WebSocket('ws://localhost:8000/ws');
+    let ws: WebSocket | null;
+    let isMounted = true;
+    async function connectWS() {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      ws = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
+      wsRef.current = ws;
 
-    wsRef.current.onopen = () => {
-      setBackendStatus('connected');
-      // Send initial level, context, and language selection
-      wsRef.current?.send(JSON.stringify({
-        type: 'session.init',
-        level: selectedLevel,
-        context: context,
-        language: language
-      }));
-      setMessages(prev => [...prev, {
-        type: 'assistant' as const,
-        content: `Connected to backend WebSocket. Starting ${languageNames[language]} conversation practice.`,
-        timestamp: new Date()
-      }]);
-      initAudioContext();
-    };
-
-    wsRef.current.onclose = () => {
-      setBackendStatus('disconnected');
-      setMessages(prev => [...prev, {
-        type: 'assistant' as const,
-        content: 'Disconnected from backend WebSocket',
-        timestamp: new Date()
-      }]);
-    };
-
-    wsRef.current.onerror = (error) => {
-      setBackendStatus('disconnected');
-      setMessages(prev => [...prev, {
-        type: 'assistant' as const,
-        content: `WebSocket error: ${error}`,
-        timestamp: new Date()
-      }]);
-    };
-
-    wsRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
-      // Handle different message types
-      switch (data.type) {
-        case 'session.created':
-          setOpenaiStatus('connected');
-          break;
-        case 'conversation.item.input_audio_transcription.completed':
-          setMessages(prev => [...prev, {
-            type: 'user' as const,
-            content: data.transcript,
-            timestamp: new Date()
-          }]);
-          break;
-        case 'response.audio_transcript.delta':
-          // Handle streaming transcript
-          if (currentStreamingMessageRef.current === null) {
-            // Start new streaming message
-            setMessages(prev => {
-              const newMessages = [...prev, {
-                type: 'assistant' as const,
-                content: data.delta,
-                timestamp: new Date(),
-                isStreaming: true
-              }];
-              currentStreamingMessageRef.current = newMessages.length - 1;
-              return newMessages;
-            });
-          } else {
-            // Update existing streaming message
-            setMessages(prev => {
-              const newMessages = [...prev];
-              const currentMessage = newMessages[currentStreamingMessageRef.current!];
-              newMessages[currentStreamingMessageRef.current!] = {
-                ...currentMessage,
-                content: currentMessage.content + data.delta
-              };
-              return newMessages;
-            });
-          }
-          break;
-        case 'response.audio_transcript.done':
-          // Finalize streaming message
-          if (currentStreamingMessageRef.current !== null) {
-            setMessages(prev => {
-              const newMessages = [...prev];
-              const currentMessage = newMessages[currentStreamingMessageRef.current!];
-              newMessages[currentStreamingMessageRef.current!] = {
-                ...currentMessage,
-                isStreaming: false
-              };
-              return newMessages;
-            });
-            currentStreamingMessageRef.current = null;
-          }
-          break;
-        case 'input_audio_buffer.speech_started':
-          // Stop AI audio playback when user starts speaking
-          stopAudioPlayback();
-          break;
-        case 'response.audio.delta':
-          // Handle audio data
-          try {
-            const audioData = atob(data.delta);
-            const audioArray = new Int16Array(audioData.length / 2);
-            for (let i = 0; i < audioData.length; i += 2) {
-              audioArray[i / 2] = (audioData.charCodeAt(i) | (audioData.charCodeAt(i + 1) << 8));
+      if (!ws) return;
+      ws.onopen = () => {
+        setBackendStatus('connected');
+        ws!.send(JSON.stringify({
+          type: 'session.init',
+          level: selectedLevel,
+          context: context,
+          language: language
+        }));
+        setMessages(prev => [...prev, {
+          type: 'assistant' as const,
+          content: `Connected to backend WebSocket. Starting ${languageNames[language]} conversation practice.`,
+          timestamp: new Date()
+        }]);
+        initAudioContext();
+      };
+      ws.onclose = () => {
+        setBackendStatus('disconnected');
+        setMessages(prev => [...prev, {
+          type: 'assistant' as const,
+          content: 'Disconnected from backend WebSocket',
+          timestamp: new Date()
+        }]);
+      };
+      ws.onerror = (error) => {
+        setBackendStatus('disconnected');
+        setMessages(prev => [...prev, {
+          type: 'assistant' as const,
+          content: `WebSocket error: ${error}`,
+          timestamp: new Date()
+        }]);
+      };
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        // Handle different message types
+        switch (data.type) {
+          case 'session.created':
+            setOpenaiStatus('connected');
+            break;
+          case 'conversation.item.input_audio_transcription.completed':
+            setMessages(prev => [...prev, {
+              type: 'user' as const,
+              content: data.transcript,
+              timestamp: new Date()
+            }]);
+            break;
+          case 'response.audio_transcript.delta':
+            // Handle streaming transcript
+            if (currentStreamingMessageRef.current === null) {
+              // Start new streaming message
+              setMessages(prev => {
+                const newMessages = [...prev, {
+                  type: 'assistant' as const,
+                  content: data.delta,
+                  timestamp: new Date(),
+                  isStreaming: true
+                }];
+                currentStreamingMessageRef.current = newMessages.length - 1;
+                return newMessages;
+              });
+            } else {
+              // Update existing streaming message
+              setMessages(prev => {
+                const newMessages = [...prev];
+                const currentMessage = newMessages[currentStreamingMessageRef.current!];
+                newMessages[currentStreamingMessageRef.current!] = {
+                  ...currentMessage,
+                  content: currentMessage.content + data.delta
+                };
+                return newMessages;
+              });
             }
-            audioBufferRef.current.push(audioArray);
-            playNextChunk();
-          } catch (error) {
-            console.error('Error processing audio data:', error);
-          }
-          break;
-        case 'error':
-          setMessages(prev => [...prev, {
-            type: 'assistant' as const,
-            content: `Error: ${data.error.message}`,
-            timestamp: new Date()
-          }]);
-          break;
-      }
-    };
-
+            break;
+          case 'response.audio_transcript.done':
+            // Finalize streaming message
+            if (currentStreamingMessageRef.current !== null) {
+              setMessages(prev => {
+                const newMessages = [...prev];
+                const currentMessage = newMessages[currentStreamingMessageRef.current!];
+                newMessages[currentStreamingMessageRef.current!] = {
+                  ...currentMessage,
+                  isStreaming: false
+                };
+                return newMessages;
+              });
+              currentStreamingMessageRef.current = null;
+            }
+            break;
+          case 'input_audio_buffer.speech_started':
+            // Stop AI audio playback when user starts speaking
+            stopAudioPlayback();
+            break;
+          case 'response.audio.delta':
+            // Handle audio data
+            try {
+              const audioData = atob(data.delta);
+              const audioArray = new Int16Array(audioData.length / 2);
+              for (let i = 0; i < audioData.length; i += 2) {
+                audioArray[i / 2] = (audioData.charCodeAt(i) | (audioData.charCodeAt(i + 1) << 8));
+              }
+              audioBufferRef.current.push(audioArray);
+              playNextChunk();
+            } catch (error) {
+              console.error('Error processing audio data:', error);
+            }
+            break;
+          case 'error':
+            setMessages(prev => [...prev, {
+              type: 'assistant' as const,
+              content: `Error: ${data.error.message}`,
+              timestamp: new Date()
+            }]);
+            break;
+        }
+      };
+    }
+    connectWS();
     return () => {
+      isMounted = false;
       if (wsRef.current) {
         wsRef.current.close();
       }
