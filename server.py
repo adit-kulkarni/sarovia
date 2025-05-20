@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 import os
 import jwt
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 import requests
 
 
@@ -17,6 +18,7 @@ import requests
 load_dotenv()
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_SERVICE_KEY")
+jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
 supabase = create_client(url, key)
 
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -52,7 +54,7 @@ active_connections = {}
 
 SUPABASE_PROJECT_REF = "tobnmxaytsknubdpzpnf"
 SUPABASE_JWT_ISSUER = f"https://{SUPABASE_PROJECT_REF}.supabase.co/auth/v1"
-SUPABASE_JWT_AUDIENCE = SUPABASE_PROJECT_REF
+SUPABASE_JWT_AUDIENCE = 'authenticated'
 JWKS_URL = f"{SUPABASE_JWT_ISSUER}/.well-known/jwks.json"
 JWKS = requests.get(JWKS_URL).json()
 
@@ -64,15 +66,36 @@ def get_public_key(token):
     raise Exception("Public key not found.")
 
 def verify_jwt(token):
-    public_key = get_public_key(token)
-    payload = jwt.decode(
-        token,
-        public_key,
-        algorithms=["RS256"],
-        audience=SUPABASE_JWT_AUDIENCE,
-        issuer=SUPABASE_JWT_ISSUER,
-    )
-    return payload
+    try:
+        # First try to decode without verification to check the algorithm
+        unverified_header = jwt.get_unverified_header(token)
+        algorithm = unverified_header.get('alg', 'RS256')
+        
+        if algorithm == 'HS256':
+            if not jwt_secret:
+                raise jwt.InvalidTokenError("JWT secret not configured for HS256")
+            payload = jwt.decode(
+                token,
+                jwt_secret,
+                algorithms=["HS256"],
+                audience=SUPABASE_JWT_AUDIENCE,
+                issuer=SUPABASE_JWT_ISSUER,
+            )
+        else:  # RS256
+            public_key = get_public_key(token)
+            payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256"],
+                audience=SUPABASE_JWT_AUDIENCE,
+                issuer=SUPABASE_JWT_ISSUER,
+            )
+        return payload
+    except ExpiredSignatureError:
+        raise jwt.InvalidTokenError("Token has expired")
+    except Exception as e:
+        print(f"JWT verification error: {str(e)}")  # Add detailed logging
+        raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
 
 async def connect_to_openai():
     """Establish WebSocket connection with OpenAI"""
@@ -268,44 +291,66 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+    connection_established = False
     try:
-        user_payload = verify_jwt(token)
-        user_id = user_payload["sub"]
-        # You can now use user_id for user-specific logic
+        # Verify token before accepting the connection
+        try:
+            user_payload = verify_jwt(token)
+            user_id = user_payload["sub"]
+        except Exception as e:
+            print(f"Authentication failed: {str(e)}")
+            await websocket.close(code=4001, reason="Invalid authentication token")
+            return
+            
+        # Accept the connection
+        await websocket.accept()
+        connection_established = True
+        
+        # Get the level, context, and language from the client's initial message
+        try:
+            initial_data = await websocket.receive_json()
+            level = initial_data.get('level', 'A1')
+            context = initial_data.get('context', 'restaurant')
+            language = initial_data.get('language', 'en')
+        except Exception as e:
+            print(f"Error receiving initial data: {e}")
+            level = 'A1'
+            context = 'restaurant'
+            language = 'en'
+        
+        # Connect to OpenAI
+        openai_ws = await connect_to_openai()
+        if not openai_ws:
+            if connection_established:
+                await websocket.send_json({"error": "Failed to connect to OpenAI service"})
+                await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
+            return
+            
+        # Start handling OpenAI responses in a separate task
+        openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
+        
+        try:
+            while True:
+                # Receive message from client
+                data = await websocket.receive_json()
+                # Forward audio data to OpenAI
+                if data.get('type') == 'input_audio_buffer.append':
+                    await forward_to_openai(openai_ws, data)
+        except Exception as e:
+            print(f"Error in websocket connection: {e}")
+        finally:
+            openai_handler.cancel()
+            await openai_ws.close()
+            
     except Exception as e:
-        await websocket.close()
-        return
-    await websocket.accept()
-    # Get the level, context, and language from the client's initial message
-    try:
-        initial_data = await websocket.receive_json()
-        level = initial_data.get('level', 'A1')  # Default to A1 if not specified
-        context = initial_data.get('context', 'restaurant')  # Default to restaurant if not specified
-        language = initial_data.get('language', 'en')  # Default to English if not specified
-    except:
-        level = 'A1'  # Default to A1 if there's any error
-        context = 'restaurant'  # Default to restaurant if there's any error
-        language = 'en'  # Default to English if there's any error
-    # Connect to OpenAI
-    openai_ws = await connect_to_openai()
-    if not openai_ws:
-        await websocket.close()
-        return
-    # Start handling OpenAI responses in a separate task
-    openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
-    try:
-        while True:
-            # Receive message from client
-            data = await websocket.receive_json()
-            # Forward audio data to OpenAI
-            if data.get('type') == 'input_audio_buffer.append':
-                await forward_to_openai(openai_ws, data)
-    except Exception as e:
-        print(f"Error in websocket connection: {e}")
+        print(f"Unexpected error: {e}")
     finally:
-        openai_handler.cancel()
-        await openai_ws.close()
-        await websocket.close()
+        if connection_established:
+            try:
+                await websocket.close()
+            except RuntimeError:
+                # Ignore "Cannot call send once a close message has been sent" error
+                pass
 
 if __name__ == "__main__":
     import uvicorn
