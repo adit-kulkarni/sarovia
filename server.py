@@ -11,8 +11,10 @@ import os
 import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 import requests
+import logging
+import uuid
 
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 # Load environment variables
 load_dotenv()
@@ -232,6 +234,8 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
 
 async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str):
     """Handle responses from OpenAI and forward to client"""
+    handler_id = str(uuid.uuid4())[:8]
+    response_created = False  # Ensure response.create is only sent once
     try:
         while True:
             message = await ws.recv()
@@ -242,11 +246,14 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
             data = json.loads(message)
             event_type = data.get('type')
 
+            logging.info(f"[Handler {handler_id}] Received event: {event_type}")
+
             # Forward the message to the client
             await client_ws.send_json(data)
 
             # Handle specific events
-            if event_type == 'session.created':
+            if event_type == 'session.created' and not response_created:
+                logging.info(f"[Handler {handler_id}] Received 'session.created' event. Sending session_config and response.create.")
                 # Send session configuration
                 session_config = {
                     "type": "session.update",
@@ -283,28 +290,33 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                     }
                 }
                 await forward_to_openai(ws, response_create)
+                response_created = True
+                logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
 
     except Exception as e:
-        print(f"Error handling OpenAI response: {e}")
+        logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
         await ws.close()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+    connection_id = str(uuid.uuid4())[:8]
     connection_established = False
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
+            logging.info(f"[Connection {connection_id}] New websocket connection attempt from user {user_id}")
         except Exception as e:
-            print(f"Authentication failed: {str(e)}")
+            logging.error(f"[Connection {connection_id}] Authentication failed: {str(e)}")
             await websocket.close(code=4001, reason="Invalid authentication token")
             return
             
         # Accept the connection
         await websocket.accept()
         connection_established = True
+        logging.info(f"[Connection {connection_id}] Websocket connection established")
         
         # Get the level, context, and language from the client's initial message
         try:
@@ -312,8 +324,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             level = initial_data.get('level', 'A1')
             context = initial_data.get('context', 'restaurant')
             language = initial_data.get('language', 'en')
+            logging.info(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}")
         except Exception as e:
-            print(f"Error receiving initial data: {e}")
+            logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
             level = 'A1'
             context = 'restaurant'
             language = 'en'
@@ -322,10 +335,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
         openai_ws = await connect_to_openai()
         if not openai_ws:
             if connection_established:
+                logging.error(f"[Connection {connection_id}] Failed to connect to OpenAI service")
                 await websocket.send_json({"error": "Failed to connect to OpenAI service"})
                 await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
             return
             
+        logging.info(f"[Connection {connection_id}] Successfully connected to OpenAI, creating handler")
         # Start handling OpenAI responses in a separate task
         openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
         
@@ -337,16 +352,18 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 if data.get('type') == 'input_audio_buffer.append':
                     await forward_to_openai(openai_ws, data)
         except Exception as e:
-            print(f"Error in websocket connection: {e}")
+            logging.error(f"[Connection {connection_id}] Error in websocket connection: {e}")
         finally:
+            logging.info(f"[Connection {connection_id}] Cleaning up handler and closing OpenAI connection")
             openai_handler.cancel()
             await openai_ws.close()
             
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logging.error(f"[Connection {connection_id}] Unexpected error: {e}")
     finally:
         if connection_established:
             try:
+                logging.info(f"[Connection {connection_id}] Closing websocket connection")
                 await websocket.close()
             except RuntimeError:
                 # Ignore "Cannot call send once a close message has been sent" error
