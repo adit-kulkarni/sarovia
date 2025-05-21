@@ -294,11 +294,16 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                 response_created = True
                 logging.debug(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
             
-            # Save assistant messages
-            elif event_type == 'response.text.delta' and conversation_id:
-                content = data.get('delta', '')
-                if content:
-                    await save_message(conversation_id, 'assistant', content)
+            # Save assistant messages (final transcript)
+            elif event_type == 'response.audio_transcript.done' and conversation_id:
+                transcript = data.get('transcript', '')
+                if transcript:
+                    await save_message(conversation_id, 'assistant', transcript)
+            # Save user messages (transcription)
+            elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
+                transcript = data.get('transcript', '')
+                if transcript:
+                    await save_message(conversation_id, 'user', transcript)
 
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
@@ -392,13 +397,14 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             while True:
                 # Receive message from client
                 data = await websocket.receive_json()
-                logging.info(f"[websocket_endpoint] Received data with conversation_id: {conversation_id}")
-
                 data_type = data.get('type')
-                logging.info(f"[websocket_endpoint] Received message type: {data_type}, conversation_id: {conversation_id}")
+                logging.info(f"[websocket_endpoint] ***MESSAGE RECEIVED***: {data_type}, conversation_id: {conversation_id}")
                 logging.info(f"[websocket_endpoint] data_type == 'conversation.item.input_audio_transcription.completed': {data_type == 'conversation.item.input_audio_transcription.completed'}")
                 logging.info(f"[websocket_endpoint] conversation_id truthy: {bool(conversation_id)}")
-                if data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
+
+                if data_type == 'input_audio_buffer.append':
+                    await forward_to_openai(openai_ws, data)
+                elif data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                     logging.info(f"[websocket_endpoint] ENTERED transcription block")
                     transcript = data.get('transcript', '')
                     logging.info(f"[websocket_endpoint] transcript: {transcript}")
@@ -409,8 +415,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                             logging.info(f"[websocket_endpoint] save_message completed for user transcript")
                         except Exception as e:
                             logging.error(f"[websocket_endpoint] Exception in save_message for user transcript: {e}")
-                # Save user messages (if sent directly)
-                elif data.get('type') == 'user_message' and conversation_id:
+                elif data_type == 'user_message' and conversation_id:
                     await save_message(conversation_id, 'user', data.get('content', ''))
                     
         except Exception as e:
