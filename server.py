@@ -232,10 +232,11 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
     )
     return base_instructions
 
-async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str):
+async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str, conversation_id: str):
     """Handle responses from OpenAI and forward to client"""
     handler_id = str(uuid.uuid4())[:8]
     response_created = False  # Ensure response.create is only sent once
+    
     try:
         while True:
             message = await ws.recv()
@@ -246,14 +247,14 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
             data = json.loads(message)
             event_type = data.get('type')
 
-            logging.info(f"[Handler {handler_id}] Received event: {event_type}")
+            logging.debug(f"[Handler {handler_id}] Received event: {event_type}")
 
             # Forward the message to the client
             await client_ws.send_json(data)
 
             # Handle specific events
             if event_type == 'session.created' and not response_created:
-                logging.info(f"[Handler {handler_id}] Received 'session.created' event. Sending session_config and response.create.")
+                logging.debug(f"[Handler {handler_id}] Received 'session.created' event. Sending session_config and response.create.")
                 # Send session configuration
                 session_config = {
                     "type": "session.update",
@@ -291,32 +292,70 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                 }
                 await forward_to_openai(ws, response_create)
                 response_created = True
-                logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
+                logging.debug(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
+            
+            # Save assistant messages
+            elif event_type == 'response.text.delta' and conversation_id:
+                content = data.get('delta', '')
+                if content:
+                    await save_message(conversation_id, 'assistant', content)
 
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
         await ws.close()
 
+async def create_conversation(user_id: str, context: str, language: str, level: str) -> str:
+    """Create a new conversation and return its ID"""
+    try:
+        logging.info(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}")
+        result = supabase.table('conversations').insert({
+            'user_id': user_id,
+            'context': context,
+            'language': language,
+            'level': level
+        }).execute()
+        logging.info(f"[create_conversation] result: {result}")
+        return result.data[0]['id']
+    except Exception as e:
+        logging.error(f"Error creating conversation: {e}")
+        raise
+
+async def save_message(conversation_id: str, role: str, content: str):
+    """Save a message to the database"""
+    try:
+        logging.info(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
+        result = supabase.table('messages').insert({
+            'conversation_id': conversation_id,
+            'role': role,
+            'content': content
+        }).execute()
+        logging.info(f"[save_message] result: {result}")
+    except Exception as e:
+        logging.error(f"Error saving message: {e}")
+        raise
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     connection_id = str(uuid.uuid4())[:8]
     connection_established = False
+    conversation_id = None
+    
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
-            logging.info(f"[Connection {connection_id}] New websocket connection attempt from user {user_id}")
+            logging.debug(f"[Connection {connection_id}] New websocket connection attempt from user {user_id}")
         except Exception as e:
-            logging.error(f"[Connection {connection_id}] Authentication failed: {str(e)}")
+            logging.debug(f"[Connection {connection_id}] Authentication failed: {str(e)}")
             await websocket.close(code=4001, reason="Invalid authentication token")
             return
             
         # Accept the connection
         await websocket.accept()
         connection_established = True
-        logging.info(f"[Connection {connection_id}] Websocket connection established")
+        logging.debug(f"[Connection {connection_id}] Websocket connection established")
         
         # Get the level, context, and language from the client's initial message
         try:
@@ -324,7 +363,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             level = initial_data.get('level', 'A1')
             context = initial_data.get('context', 'restaurant')
             language = initial_data.get('language', 'en')
-            logging.info(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}")
+            logging.debug(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}")
+            
+            # Create a new conversation
+            conversation_id = await create_conversation(user_id, context, language, level)
+            logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
+            
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
             level = 'A1'
@@ -340,17 +384,35 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
             return
             
-        logging.info(f"[Connection {connection_id}] Successfully connected to OpenAI, creating handler")
-        # Start handling OpenAI responses in a separate task
-        openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language))
+        logging.debug(f"[Connection {connection_id}] Successfully connected to OpenAI, creating handler")
+        # Start handling OpenAI responses in a separate task, pass conversation_id
+        openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language, conversation_id))
         
         try:
             while True:
                 # Receive message from client
                 data = await websocket.receive_json()
-                # Forward audio data to OpenAI
-                if data.get('type') == 'input_audio_buffer.append':
-                    await forward_to_openai(openai_ws, data)
+                logging.info(f"[websocket_endpoint] Received data with conversation_id: {conversation_id}")
+
+                data_type = data.get('type')
+                logging.info(f"[websocket_endpoint] Received message type: {data_type}, conversation_id: {conversation_id}")
+                logging.info(f"[websocket_endpoint] data_type == 'conversation.item.input_audio_transcription.completed': {data_type == 'conversation.item.input_audio_transcription.completed'}")
+                logging.info(f"[websocket_endpoint] conversation_id truthy: {bool(conversation_id)}")
+                if data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
+                    logging.info(f"[websocket_endpoint] ENTERED transcription block")
+                    transcript = data.get('transcript', '')
+                    logging.info(f"[websocket_endpoint] transcript: {transcript}")
+                    if transcript:
+                        try:
+                            logging.info(f"[websocket_endpoint] Calling save_message for user transcript")
+                            await save_message(conversation_id, 'user', transcript)
+                            logging.info(f"[websocket_endpoint] save_message completed for user transcript")
+                        except Exception as e:
+                            logging.error(f"[websocket_endpoint] Exception in save_message for user transcript: {e}")
+                # Save user messages (if sent directly)
+                elif data.get('type') == 'user_message' and conversation_id:
+                    await save_message(conversation_id, 'user', data.get('content', ''))
+                    
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error in websocket connection: {e}")
         finally:
@@ -368,6 +430,42 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             except RuntimeError:
                 # Ignore "Cannot call send once a close message has been sent" error
                 pass
+
+# Add new endpoint to get conversation history
+@app.get("/api/conversations")
+async def get_conversations(token: str = Query(...)):
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Get conversations with their latest message
+        result = supabase.table('conversations').select(
+            'id, context, language, level, created_at, updated_at, messages!inner(content, role, created_at)'
+        ).eq('user_id', user_id).order('created_at', desc=True).execute()
+        
+        return result.data
+    except Exception as e:
+        logging.error(f"Error getting conversations: {e}")
+        raise
+
+@app.get("/api/conversations/{conversation_id}/messages")
+async def get_conversation_messages(conversation_id: str, token: str = Query(...)):
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify the conversation belongs to the user
+        conversation = supabase.table('conversations').select('id').eq('id', conversation_id).eq('user_id', user_id).execute()
+        if not conversation.data:
+            raise Exception("Conversation not found or access denied")
+        
+        # Get all messages for the conversation
+        result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', asc=True).execute()
+        
+        return result.data
+    except Exception as e:
+        logging.error(f"Error getting conversation messages: {e}")
+        raise
 
 if __name__ == "__main__":
     import uvicorn

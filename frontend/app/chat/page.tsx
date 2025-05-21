@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import React, { useEffect, useState, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
+import Layout from '../components/Layout';
+import ConversationHistory from '../components/ConversationHistory';
 
 interface Message {
-  type: 'user' | 'assistant';
+  role: 'user' | 'assistant';
   content: string;
-  timestamp: Date;
+  timestamp: string;
   isStreaming?: boolean;
 }
 
@@ -31,28 +33,76 @@ const languageNames: { [key: string]: string } = {
 };
 
 export default function Chat() {
-  const searchParams = useSearchParams();
-  const context = searchParams.get('context') || 'restaurant';
-  const language = searchParams.get('language') || 'en';
-  
-  const [backendStatus, setBackendStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  const [openaiStatus, setOpenaiStatus] = useState<'disconnected' | 'connected'>('disconnected');
-  const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
   const [selectedLevel, setSelectedLevel] = useState('A1');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const currentStreamingMessageRef = useRef<number | null>(null);
-
+  const [selectedContext, setSelectedContext] = useState('restaurant');
+  const [isLoading, setIsLoading] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(true);
+  
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioBufferRef = useRef<Int16Array[]>([]);
-  const isPlayingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentStreamingMessageRef = useRef<number | null>(null);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const isPlayingRef = useRef(false);
+  const audioBufferRef = useRef<Int16Array[]>([]);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  // Scroll to bottom of messages
+  const languages = {
+    en: 'English',
+    it: 'Italian',
+    es: 'Spanish',
+    pt: 'Portuguese',
+    fr: 'French',
+    de: 'German',
+    kn: 'Kannada'
+  };
+
+  const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+  const contexts = {
+    restaurant: 'Restaurant',
+    drinks: 'Drinks',
+    introduction: 'Introduction',
+    market: 'Market',
+    karaoke: 'Karaoke',
+    city: 'City Guide'
+  };
+
+  useEffect(() => {
+    const initializeChat = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          router.push('/login');
+          return;
+        }
+
+        const context = searchParams.get('context') || 'restaurant';
+        const language = searchParams.get('language') || 'en';
+        const level = searchParams.get('level') || 'A1';
+
+        setSelectedContext(context);
+        setSelectedLanguage(language);
+        setSelectedLevel(level);
+        setIsLoading(false);
+      } catch (err) {
+        setError('Failed to initialize chat');
+        setIsLoading(false);
+      }
+    };
+
+    initializeChat();
+  }, [router, searchParams]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -152,98 +202,107 @@ export default function Chat() {
         
         ws.onopen = () => {
           if (!isMounted) return;
-          setBackendStatus('connected');
+          setIsConnected(true);
           ws!.send(JSON.stringify({
             type: 'session.init',
             level: selectedLevel,
-            context: context,
-            language: language
+            context: selectedContext,
+            language: selectedLanguage
           }));
           setMessages(prev => [...prev, {
-            type: 'assistant' as const,
-            content: `Connected to backend WebSocket. Starting ${languageNames[language]} conversation practice.`,
-            timestamp: new Date()
+            role: 'assistant',
+            content: `Connected to backend WebSocket. Starting ${languageNames[selectedLanguage]} conversation practice.`,
+            timestamp: new Date().toISOString()
           }]);
           initAudioContext();
         };
 
         ws.onclose = () => {
           if (!isMounted) return;
-          setBackendStatus('disconnected');
+          setIsConnected(false);
           setMessages(prev => [...prev, {
-            type: 'assistant' as const,
+            role: 'assistant',
             content: 'Disconnected from backend WebSocket',
-            timestamp: new Date()
+            timestamp: new Date().toISOString()
           }]);
         };
 
         ws.onerror = (error) => {
           if (!isMounted) return;
-          setBackendStatus('disconnected');
+          setIsConnected(false);
           setMessages(prev => [...prev, {
-            type: 'assistant' as const,
+            role: 'assistant',
             content: `WebSocket error: ${error}`,
-            timestamp: new Date()
+            timestamp: new Date().toISOString()
           }]);
         };
 
         ws.onmessage = (event) => {
-          if (!isMounted) return;
           const data = JSON.parse(event.data);
           
-          // Handle different message types
           switch (data.type) {
             case 'session.created':
-              setOpenaiStatus('connected');
+              setIsConnected(true);
               break;
             case 'conversation.item.input_audio_transcription.completed':
               setMessages(prev => [...prev, {
-                type: 'user' as const,
+                role: 'user',
                 content: data.transcript,
-                timestamp: new Date()
+                timestamp: new Date().toISOString()
               }]);
               break;
-            case 'response.audio_transcript.delta':
-              // Handle streaming transcript
-              if (currentStreamingMessageRef.current === null) {
-                // Start new streaming message
-                setMessages(prev => {
-                  const newMessages = [...prev, {
-                    type: 'assistant' as const,
-                    content: data.delta,
-                    timestamp: new Date(),
-                    isStreaming: true
-                  }];
-                  currentStreamingMessageRef.current = newMessages.length - 1;
-                  return newMessages;
-                });
-              } else {
-                // Update existing streaming message
-                setMessages(prev => {
+            case 'response.audio_transcript.delta': {
+              setMessages(prev => {
+                // If no streaming message, create one
+                if (
+                  currentStreamingMessageRef.current === null ||
+                  currentStreamingMessageRef.current < 0 ||
+                  currentStreamingMessageRef.current >= prev.length ||
+                  !prev[currentStreamingMessageRef.current].isStreaming
+                ) {
+                  // Start a new streaming message
+                  const newIndex = prev.length;
+                  currentStreamingMessageRef.current = newIndex;
+                  return [
+                    ...prev,
+                    {
+                      role: 'assistant' as const,
+                      content: data.delta,
+                      timestamp: new Date().toISOString(),
+                      isStreaming: true
+                    }
+                  ];
+                } else {
+                  // Append to the current streaming message
+                  const idx = currentStreamingMessageRef.current;
                   const newMessages = [...prev];
-                  const currentMessage = newMessages[currentStreamingMessageRef.current!];
-                  newMessages[currentStreamingMessageRef.current!] = {
-                    ...currentMessage,
-                    content: currentMessage.content + data.delta
+                  newMessages[idx] = {
+                    ...newMessages[idx],
+                    content: newMessages[idx].content + data.delta
                   };
                   return newMessages;
-                });
-              }
+                }
+              });
               break;
+            }
             case 'response.audio_transcript.done':
-              // Finalize streaming message
-              if (currentStreamingMessageRef.current !== null) {
-                setMessages(prev => {
+              setMessages(prev => {
+                if (
+                  currentStreamingMessageRef.current !== null &&
+                  currentStreamingMessageRef.current >= 0 &&
+                  currentStreamingMessageRef.current < prev.length
+                ) {
+                  const idx = currentStreamingMessageRef.current;
                   const newMessages = [...prev];
-                  const currentMessage = newMessages[currentStreamingMessageRef.current!];
-                  newMessages[currentStreamingMessageRef.current!] = {
-                    ...currentMessage,
+                  newMessages[idx] = {
+                    ...newMessages[idx],
                     isStreaming: false
                   };
+                  currentStreamingMessageRef.current = null;
                   return newMessages;
-                });
-                currentStreamingMessageRef.current = null;
-              }
+                }
+                return prev;
+              });
               break;
             case 'input_audio_buffer.speech_started':
               // Stop AI audio playback when user starts speaking
@@ -264,11 +323,7 @@ export default function Chat() {
               }
               break;
             case 'error':
-              setMessages(prev => [...prev, {
-                type: 'assistant' as const,
-                content: `Error: ${data.error.message}`,
-                timestamp: new Date()
-              }]);
+              setError(data.error.message);
               break;
           }
         };
@@ -295,7 +350,7 @@ export default function Chat() {
       }
       stopAudioPlayback();
     };
-  }, [context, language, selectedLevel]); // Dependencies that should trigger reconnection
+  }, [selectedContext, selectedLanguage, selectedLevel]); // Dependencies that should trigger reconnection
 
   const startRecording = async () => {
     try {
@@ -347,16 +402,16 @@ export default function Chat() {
 
       setIsRecording(true);
       setMessages(prev => [...prev, {
-        type: 'assistant' as const,
+        role: 'assistant',
         content: 'Started recording',
-        timestamp: new Date()
+        timestamp: new Date().toISOString()
       }]);
     } catch (error) {
       console.error('Error starting recording:', error);
       setMessages(prev => [...prev, {
-        type: 'assistant' as const,
+        role: 'assistant',
         content: `Error starting recording: ${error}`,
-        timestamp: new Date()
+        timestamp: new Date().toISOString()
       }]);
     }
   };
@@ -368,9 +423,9 @@ export default function Chat() {
     }
     setIsRecording(false);
     setMessages(prev => [...prev, {
-      type: 'assistant' as const,
+      role: 'assistant',
       content: 'Stopped recording',
-      timestamp: new Date()
+      timestamp: new Date().toISOString()
     }]);
   };
 
@@ -379,101 +434,105 @@ export default function Chat() {
     router.refresh();
   };
 
+  if (isLoading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex flex-col items-center justify-center p-4 relative">
-      <button
-        onClick={handleLogout}
-        className="absolute top-4 right-4 bg-orange-100 hover:bg-orange-200 text-orange-700 font-semibold py-2 px-4 rounded-lg shadow transition-all text-sm z-20"
-      >
-        Log Out
-      </button>
-      <div className="w-full max-w-md mx-auto flex flex-col h-[90vh] rounded-3xl shadow-xl border border-orange-100 bg-white/80 overflow-hidden">
+    <Layout>
+      <div className="flex flex-col h-screen">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 bg-white/90 border-b border-orange-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-orange-200 flex items-center justify-center text-lg font-bold text-orange-700">
-              AI
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-gray-800">Voice Assistant</h1>
-              <p className="text-sm text-gray-500">
-                {backendStatus === 'connected' ? 'Connected' : 'Disconnected'}
-              </p>
-            </div>
-          </div>
-          <div className="text-right">
-            <div className="text-sm font-medium text-orange-600">
-              Level: {selectedLevel}
-            </div>
-            <div className="text-xs text-gray-500">
-              {contextTitles[context]}
-            </div>
-          </div>
-        </div>
-
-        {/* Messages Container */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                  message.type === 'user'
-                    ? 'bg-orange-500 text-white rounded-br-none'
-                    : 'bg-gray-100 text-gray-800 rounded-bl-none'
-                }`}
+        <div className="bg-white/80 backdrop-blur-sm border-b border-orange-100 p-4">
+          <div className="max-w-6xl mx-auto flex justify-between items-center">
+            <div className="flex items-center space-x-4">
+              <select
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
-                <p className="text-sm">{message.content}</p>
-                <span className="text-xs opacity-70 mt-1 block">
-                  {message.timestamp.toLocaleTimeString()}
-                </span>
-              </div>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Controls */}
-        <div className="p-4 border-t border-orange-100 bg-white/90">
-          {backendStatus === 'connected' ? (
-            <div className="flex gap-2">
+                {Object.entries(languages).map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
               <select
                 value={selectedLevel}
                 onChange={(e) => setSelectedLevel(e.target.value)}
-                className="py-3 px-4 rounded-xl font-medium bg-white border border-orange-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
-                <option value="A1">A1</option>
-                <option value="A2">A2</option>
-                <option value="B1">B1</option>
-                <option value="B2">B2</option>
-                <option value="C1">C1</option>
-                <option value="C2">C2</option>
+                {levels.map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
               </select>
-              <button
-                onClick={isRecording ? stopRecording : startRecording}
-                className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
-                  isRecording
-                    ? 'bg-red-500 hover:bg-red-600 text-white'
-                    : 'bg-orange-500 hover:bg-orange-600 text-white'
-                }`}
+              <select
+                value={selectedContext}
+                onChange={(e) => setSelectedContext(e.target.value)}
+                className="bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
-                {isRecording ? 'Stop Recording' : 'Start Recording'}
-              </button>
+                {Object.entries(contexts).map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
             </div>
-          ) : (
-            <button
-              onClick={() => {
-                wsRef.current = new WebSocket('ws://localhost:8000/ws');
-              }}
-              className="w-full py-3 px-4 rounded-xl font-medium bg-orange-500 hover:bg-orange-600 text-white transition-all"
-            >
-              Start Conversation
-            </button>
-          )}
+            <div className="flex items-center space-x-2">
+              <span className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+              <span className="text-sm text-gray-600">
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
+          </div>
         </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-6xl mx-auto space-y-4">
+            {messages.map((message, index) => (
+              <div
+                key={index}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                    message.role === 'user'
+                      ? 'bg-orange-500 text-white rounded-br-none'
+                      : 'bg-gray-100 text-gray-800 rounded-bl-none'
+                  }`}
+                >
+                  <p className="text-sm">{message.content}</p>
+                  <span className="text-xs opacity-70 mt-1 block">
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="bg-white/80 backdrop-blur-sm border-t border-orange-100 p-4">
+          <div className="max-w-6xl mx-auto flex justify-center">
+            <button
+              onClick={isRecording ? stopRecording : startRecording}
+              className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+            >
+              {isRecording ? 'Stop Recording' : 'Start Recording'}
+            </button>
+          </div>
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="fixed bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
+            {error}
+          </div>
+        )}
       </div>
-    </div>
+    </Layout>
   );
 } 
