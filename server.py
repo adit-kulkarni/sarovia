@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, Query
+from fastapi import FastAPI, WebSocket, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
@@ -13,6 +13,7 @@ from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 import requests
 import logging
 import uuid
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -45,11 +46,12 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_origins=["http://localhost:3000", "https://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Store active connections
 active_connections = {}
@@ -292,7 +294,7 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                 }
                 await forward_to_openai(ws, response_create)
                 response_created = True
-                logging.debug(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
+                logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
             
             # Save assistant messages (final transcript)
             elif event_type == 'response.audio_transcript.done' and conversation_id:
@@ -320,7 +322,7 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
             'language': language,
             'level': level
         }).execute()
-        logging.info(f"[create_conversation] result: {result}")
+        logging.info(f"[create_conversation] Supabase insert result.data: {result.data}")
         return result.data[0]['id']
     except Exception as e:
         logging.error(f"Error creating conversation: {e}")
@@ -329,13 +331,13 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
 async def save_message(conversation_id: str, role: str, content: str):
     """Save a message to the database"""
     try:
-        logging.info(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
+        logging.debug(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
         result = supabase.table('messages').insert({
             'conversation_id': conversation_id,
             'role': role,
             'content': content
         }).execute()
-        logging.info(f"[save_message] result: {result}")
+        logging.debug(f"[save_message] result: {result}")
     except Exception as e:
         logging.error(f"Error saving message: {e}")
         raise
@@ -374,6 +376,20 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             conversation_id = await create_conversation(user_id, context, language, level)
             logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
             
+            # Send session.created with conversation_id
+            session_created = {
+                "type": "session.created",
+                "session": {
+                    "conversation_id": conversation_id,
+                    "level": level,
+                    "context": context,
+                    "language": language
+                }
+            }
+            logging.info(f"[Connection {connection_id}] About to send session.created with conversation_id: {conversation_id}")
+            logging.info(f"[Connection {connection_id}] session_created message: {session_created}")
+            await websocket.send_json(session_created)
+            
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
             level = 'A1'
@@ -398,21 +414,21 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 # Receive message from client
                 data = await websocket.receive_json()
                 data_type = data.get('type')
-                logging.info(f"[websocket_endpoint] ***MESSAGE RECEIVED***: {data_type}, conversation_id: {conversation_id}")
-                logging.info(f"[websocket_endpoint] data_type == 'conversation.item.input_audio_transcription.completed': {data_type == 'conversation.item.input_audio_transcription.completed'}")
-                logging.info(f"[websocket_endpoint] conversation_id truthy: {bool(conversation_id)}")
+                logging.debug(f"[websocket_endpoint] ***MESSAGE RECEIVED***: {data_type}, conversation_id: {conversation_id}")
+                logging.debug(f"[websocket_endpoint] data_type == 'conversation.item.input_audio_transcription.completed': {data_type == 'conversation.item.input_audio_transcription.completed'}")
+                logging.debug(f"[websocket_endpoint] conversation_id truthy: {bool(conversation_id)}")
 
                 if data_type == 'input_audio_buffer.append':
                     await forward_to_openai(openai_ws, data)
                 elif data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
-                    logging.info(f"[websocket_endpoint] ENTERED transcription block")
+                    logging.debug(f"[websocket_endpoint] ENTERED transcription block")
                     transcript = data.get('transcript', '')
-                    logging.info(f"[websocket_endpoint] transcript: {transcript}")
+                    logging.debug(f"[websocket_endpoint] transcript: {transcript}")
                     if transcript:
                         try:
-                            logging.info(f"[websocket_endpoint] Calling save_message for user transcript")
+                            logging.debug(f"[websocket_endpoint] Calling save_message for user transcript")
                             await save_message(conversation_id, 'user', transcript)
-                            logging.info(f"[websocket_endpoint] save_message completed for user transcript")
+                            logging.debug(f"[websocket_endpoint] save_message completed for user transcript")
                         except Exception as e:
                             logging.error(f"[websocket_endpoint] Exception in save_message for user transcript: {e}")
                 elif data_type == 'user_message' and conversation_id:
@@ -465,11 +481,109 @@ async def get_conversation_messages(conversation_id: str, token: str = Query(...
             raise Exception("Conversation not found or access denied")
         
         # Get all messages for the conversation
-        result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', asc=True).execute()
+        result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', 'asc').execute()
         
         return result.data
     except Exception as e:
         logging.error(f"Error getting conversation messages: {e}")
+        raise
+
+async def generate_hint(level: str, context: str, language: str, conversation_history: list) -> str:
+    """Generate a conversation hint using OpenAI's chat completions API"""
+    try:
+        # Get the conversation context and instructions
+        instructions = get_level_specific_instructions(level, context, language)
+        
+        # Format conversation history, handling empty or short conversations
+        if not conversation_history:
+            history_text = "This is the start of the conversation."
+        else:
+            # Take up to 5 most recent messages, or all if less than 5
+            recent_messages = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_messages])
+        
+        # Create the prompt for hint generation
+        prompt = f"""Based on the following conversation context and instructions, suggest a natural next response for the user.
+        The response should be appropriate for their language level ({level}) and the current context ({context}).
+
+        Instructions:
+        {instructions}
+
+        Recent conversation:
+        {history_text}
+
+        Provide a single, natural response suggestion that the user could say next. Keep it simple and appropriate for their level.
+        If this is the start of the conversation, suggest an appropriate opening line."""
+
+        # Call OpenAI's chat completions API
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4-turbo-preview",
+                "messages": [{"role": "system", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 150
+            }
+        )
+        
+        if response.status_code == 200:
+            hint = response.json()["choices"][0]["message"]["content"].strip()
+            logging.info(f"[generate_hint] Generated hint for {len(conversation_history)} messages: {hint}")
+            return hint
+        else:
+            logging.error(f"Error generating hint: {response.text}")
+            return "Sorry, I couldn't generate a hint at this time."
+            
+    except Exception as e:
+        logging.error(f"Error in generate_hint: {e}")
+        return "Sorry, I couldn't generate a hint at this time."
+
+class HintRequest(BaseModel):
+    conversation_id: str
+
+@app.post("/api/hint")
+async def get_hint(
+    request: HintRequest,
+    token: str = Query(...)
+):
+    conversation_id = request.conversation_id
+    logging.info(f"[get_hint] Incoming request: conversation_id={conversation_id}, token={token}")
+    try:
+        # Verify token
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        logging.info(f"[get_hint] Request received for conversation_id: {conversation_id}")
+        
+        # Verify the conversation belongs to the user
+        conversation = supabase.table('conversations').select('id, level, context, language').eq('id', conversation_id).eq('user_id', user_id).execute()
+        if not conversation.data:
+            logging.error(f"[get_hint] Conversation not found or access denied for user {user_id}")
+            raise Exception("Conversation not found or access denied")
+            
+        # Get conversation messages
+        messages = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', desc=False).execute()
+        
+        logging.info(f"[get_hint] Found {len(messages.data)} messages for conversation")
+        
+        # Generate hint
+        hint = await generate_hint(
+            conversation.data[0]['level'],
+            conversation.data[0]['context'],
+            conversation.data[0]['language'],
+            messages.data
+        )
+        
+        logging.info(f"[get_hint] Generated hint: {hint}")
+        
+        return {"hint": hint}
+        
+    except Exception as e:
+        logging.error(f"[get_hint] Error getting hint: {e}")
         raise
 
 if __name__ == "__main__":

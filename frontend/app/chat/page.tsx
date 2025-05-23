@@ -41,6 +41,9 @@ export default function Chat() {
   const [selectedContext, setSelectedContext] = useState('restaurant');
   const [isLoading, setIsLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [currentHint, setCurrentHint] = useState<string | null>(null);
+  const [isLoadingHint, setIsLoadingHint] = useState(false);
+  const [conversation_id, setConversationId] = useState<string | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -238,11 +241,23 @@ export default function Chat() {
 
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
+          console.log('WebSocket message received:', data);
           
           switch (data.type) {
-            case 'session.created':
+            case 'session.created': {
               setIsConnected(true);
+              let convId = null;
+              if (data.session && data.session.conversation_id) {
+                convId = data.session.conversation_id;
+              } else if (data.conversation_id) {
+                convId = data.conversation_id;
+              }
+              if (convId && !conversation_id) {
+                console.log('Setting conversation_id:', convId);
+                setConversationId(convId);
+              }
               break;
+            }
             case 'conversation.item.input_audio_transcription.completed':
               setMessages(prev => [...prev, {
                 role: 'user',
@@ -323,6 +338,9 @@ export default function Chat() {
               break;
             case 'error':
               setError(data.error.message);
+              break;
+            default:
+              // No error log for other message types
               break;
           }
         };
@@ -433,6 +451,56 @@ export default function Chat() {
     router.refresh();
   };
 
+  const getHint = async () => {
+    if (!conversation_id) {
+      setError('No active conversation found');
+      return;
+    }
+    
+    setIsLoadingHint(true);
+    setError(null);
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push('/login');
+        return;
+      }
+
+      const url = `http://localhost:8000/api/hint?token=${session.access_token}`;
+      const body = { conversation_id };
+      console.log('Sending hint request:', { url, body });
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        throw new Error(responseData.detail || 'Failed to get hint');
+      }
+
+      console.log('Received hint response:', responseData);
+      
+      if (responseData.hint) {
+        setCurrentHint(responseData.hint);
+      } else {
+        throw new Error('No hint received from server');
+      }
+    } catch (error) {
+      console.error('Error getting hint:', error);
+      setError(error instanceof Error ? error.message : 'Failed to get hint');
+      setCurrentHint(null);
+    } finally {
+      setIsLoadingHint(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -469,29 +537,62 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-6xl mx-auto space-y-4">
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-6xl mx-auto space-y-4">
+            {messages.map((message, index) => (
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                  message.role === 'user'
-                    ? 'bg-orange-500 text-white rounded-br-none'
-                    : 'bg-gray-100 text-gray-800 rounded-bl-none'
-                }`}
+                key={index}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <p className="text-sm">{message.content}</p>
-                <span className="text-xs opacity-70 mt-1 block">
-                  {new Date(message.timestamp).toLocaleTimeString()}
-                </span>
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                    message.role === 'user'
+                      ? 'bg-orange-500 text-white rounded-br-none'
+                      : 'bg-gray-100 text-gray-800 rounded-bl-none'
+                  }`}
+                >
+                  <p className="text-sm">{message.content}</p>
+                  <span className="text-xs opacity-70 mt-1 block">
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
               </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* Hint Panel */}
+        <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 p-4 flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Conversation Hints</h3>
+            <button
+              onClick={getHint}
+              disabled={isLoadingHint}
+              className="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50"
+            >
+              {isLoadingHint ? (
+                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+              ) : (
+                'Get Hint'
+              )}
+            </button>
+          </div>
+          
+          {currentHint && (
+            <div className="flex-1 bg-orange-50 rounded-lg p-4">
+              <p className="text-gray-800">{currentHint}</p>
             </div>
-          ))}
-          <div ref={messagesEndRef} />
+          )}
+          
+          {!currentHint && !isLoadingHint && (
+            <div className="flex-1 flex items-center justify-center text-gray-500">
+              <p className="text-center">Click "Get Hint" to receive a suggestion for your next response</p>
+            </div>
+          )}
         </div>
       </div>
 
