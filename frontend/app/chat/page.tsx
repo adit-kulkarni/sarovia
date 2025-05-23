@@ -583,7 +583,7 @@ export default function Chat() {
           </div>
           
           {currentHint && (
-            <div className="flex-1 bg-orange-50 rounded-lg p-4">
+            <div className="bg-orange-50 rounded-lg p-4 inline-block w-auto max-w-full mb-4">
               <p className="text-gray-800">{currentHint}</p>
             </div>
           )}
