@@ -14,6 +14,8 @@ import requests
 import logging
 import uuid
 from pydantic import BaseModel
+from typing import List, Optional
+import aiohttp
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -234,6 +236,134 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
     )
     return base_instructions
 
+async def process_feedback_background(message_id: str, language: str, level: str, client_ws: WebSocket):
+    """Process feedback in the background without blocking the conversation"""
+    try:
+        # Get the message from the database
+        message_result = supabase.table('messages').select('*').eq('id', message_id).execute()
+        if not message_result.data:
+            logging.error(f"[Background] Message not found: message_id={message_id}")
+            return
+        
+        message = message_result.data[0]
+        original_message = message['content']
+        
+        # Get conversation context
+        conversation_result = supabase.table('conversations').select('*').eq('id', message['conversation_id']).execute()
+        if not conversation_result.data:
+            logging.error(f"[Background] Conversation not found for message_id={message_id}")
+            return
+        
+        conversation = conversation_result.data[0]
+        
+        # Get recent messages for context
+        context_messages = supabase.table('messages').select('*').eq('conversation_id', message['conversation_id']).order('created_at', desc=True).limit(5).execute()
+        
+        # Prepare the prompt for OpenAI
+        prompt = f"""Analyze the following message in {language} for language learning feedback.
+        Student Level: {level}
+        Context: {conversation['context']}
+        
+        Recent conversation context:
+        {format_conversation_context(context_messages.data)}
+        
+        Message to analyze: "{original_message}"
+        
+        If the message is perfect (no mistakes), return an empty mistakes array.
+        If there are mistakes, provide feedback in the following JSON format:
+        {{
+            "messageId": "{message_id}",
+            "originalMessage": "{original_message}",
+            "mistakes": [
+                {{
+                    "category": "grammar|vocabulary|spelling|punctuation|syntax|word choice|register/formality|other",
+                    "type": "<specific mistake type>",
+                    "error": "<incorrect text>",
+                    "correction": "<corrected text>",
+                    "explanation": "<clear explanation>",
+                    "severity": "minor|moderate|critical",
+                    "languageFeatureTags": ["tag1", "tag2"]
+                }}
+            ]
+        }}
+        
+        Categories and types must be from the predefined lists:
+        - grammar: verb tense, verb usage, subject-verb agreement, article usage, preposition usage, pluralization, auxiliary verb usage, modal verb usage, pronoun agreement, negation, comparatives/superlatives, conditional structures, passive voice, question formation, other
+        - vocabulary: word meaning error, false friend, missing word, extra word, word form, other
+        - spelling: common spelling error, homophone confusion, other
+        - punctuation: missing punctuation, comma splice, run-on sentence, quotation mark error, other
+        - syntax: word order, run-on sentence, fragment/incomplete sentence, other
+        - word choice: unnatural phrasing, contextually inappropriate word, idiomatic error, register mismatch, other
+        - register/formality: informal in formal context, formal in informal context, other
+        
+        Important: If the message is perfect for the student's level, return an empty mistakes array.
+        """
+        
+        # Call OpenAI API using aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4-turbo-preview",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.3,
+                    "response_format": { "type": "json_object" }
+                }
+            ) as response:
+                if response.status != 200:
+                    response_text = await response.text()
+                    logging.error(f"[Background] OpenAI API error: {response_text}")
+                    return
+                
+                response_data = await response.json()
+                feedback_data = response_data["choices"][0]["message"]["content"]
+        
+        # Parse and validate the response
+        feedback = FeedbackResponse.parse_raw(feedback_data)
+        
+        # Log the feedback results
+        mistake_count = len(feedback.mistakes)
+        if mistake_count == 0:
+            logging.info(f"[Background] Perfect message detected for message_id={message_id}")
+        else:
+            logging.info(f"[Background] Found {mistake_count} mistakes for message_id={message_id}")
+            for i, mistake in enumerate(feedback.mistakes, 1):
+                logging.info(f"[Background] Mistake {i}: category={mistake.category}, type={mistake.type}, severity={mistake.severity}")
+        
+        # Convert mistakes to dictionaries for database storage
+        mistakes_dict = [mistake.dict() for mistake in feedback.mistakes]
+        
+        # Save feedback to database
+        supabase.table('message_feedback').insert({
+            'message_id': message_id,
+            'original_message': original_message,
+            'mistakes': mistakes_dict
+        }).execute()
+        
+        # Send feedback to client
+        await client_ws.send_json({
+            "type": "feedback.generated",
+            "messageId": message_id,
+            "feedback": feedback.dict(),
+            "hasMistakes": len(feedback.mistakes) > 0
+        })
+        logging.info(f"[Background] Feedback sent to client for message_id={message_id}, hasMistakes={len(feedback.mistakes) > 0}")
+        
+    except Exception as e:
+        logging.error(f"[Background] Error generating feedback: {e}")
+        try:
+            await client_ws.send_json({
+                "type": "feedback.error",
+                "messageId": message_id,
+                "error": str(e)
+            })
+        except Exception as ws_error:
+            logging.error(f"[Background] Error sending feedback error to client: {ws_error}")
+
 async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str, conversation_id: str):
     """Handle responses from OpenAI and forward to client"""
     handler_id = str(uuid.uuid4())[:8]
@@ -248,6 +378,11 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
             # Parse the message
             data = json.loads(message)
             event_type = data.get('type')
+
+            # Forward the message to the client immediately for audio events
+            if event_type in ['response.audio.delta', 'response.audio.done', 'input_audio_buffer.speech_started']:
+                await client_ws.send_json(data)
+                continue
 
             logging.debug(f"[Handler {handler_id}] Received event: {event_type}")
 
@@ -300,12 +435,27 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
             elif event_type == 'response.audio_transcript.done' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
-                    await save_message(conversation_id, 'assistant', transcript)
-            # Save user messages (transcription)
+                    # Start saving message in background
+                    asyncio.create_task(save_message(conversation_id, 'assistant', transcript))
+            # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
-                    await save_message(conversation_id, 'user', transcript)
+                    logging.info(f"[WebSocket] Received user message: {transcript}")
+                    # Start both operations in background without awaiting
+                    async def save_and_generate_feedback():
+                        try:
+                            message_result = await save_message(conversation_id, 'user', transcript)
+                            if message_result and message_result.data:
+                                message_id = message_result.data[0]['id']
+                                # Start feedback generation in background
+                                asyncio.create_task(process_feedback_background(message_id, language, level, client_ws))
+                                logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
+                        except Exception as e:
+                            logging.error(f"[WebSocket] Error in save_and_generate_feedback: {e}")
+                    
+                    # Start the background task without awaiting
+                    asyncio.create_task(save_and_generate_feedback())
 
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
@@ -315,21 +465,21 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
 async def create_conversation(user_id: str, context: str, language: str, level: str) -> str:
     """Create a new conversation and return its ID"""
     try:
-        logging.info(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}")
+        logging.debug(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}")
         result = supabase.table('conversations').insert({
             'user_id': user_id,
             'context': context,
             'language': language,
             'level': level
         }).execute()
-        logging.info(f"[create_conversation] Supabase insert result.data: {result.data}")
+        logging.debug(f"[create_conversation] Supabase insert result.data: {result.data}")
         return result.data[0]['id']
     except Exception as e:
         logging.error(f"Error creating conversation: {e}")
         raise
 
 async def save_message(conversation_id: str, role: str, content: str):
-    """Save a message to the database"""
+    """Save a message to the database and return the result"""
     try:
         logging.debug(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
         result = supabase.table('messages').insert({
@@ -338,6 +488,7 @@ async def save_message(conversation_id: str, role: str, content: str):
             'content': content
         }).execute()
         logging.debug(f"[save_message] result: {result}")
+        return result
     except Exception as e:
         logging.error(f"Error saving message: {e}")
         raise
@@ -386,8 +537,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                     "language": language
                 }
             }
-            logging.info(f"[Connection {connection_id}] About to send session.created with conversation_id: {conversation_id}")
-            logging.info(f"[Connection {connection_id}] session_created message: {session_created}")
+            logging.debug(f"[Connection {connection_id}] About to send session.created with conversation_id: {conversation_id}")
+            logging.debug(f"[Connection {connection_id}] session_created message: {session_created}")
             await websocket.send_json(session_created)
             
         except Exception as e:
@@ -415,29 +566,34 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 data = await websocket.receive_json()
                 data_type = data.get('type')
                 logging.debug(f"[websocket_endpoint] ***MESSAGE RECEIVED***: {data_type}, conversation_id: {conversation_id}")
-                logging.debug(f"[websocket_endpoint] data_type == 'conversation.item.input_audio_transcription.completed': {data_type == 'conversation.item.input_audio_transcription.completed'}")
-                logging.debug(f"[websocket_endpoint] conversation_id truthy: {bool(conversation_id)}")
 
                 if data_type == 'input_audio_buffer.append':
                     await forward_to_openai(openai_ws, data)
                 elif data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
-                    logging.debug(f"[websocket_endpoint] ENTERED transcription block")
                     transcript = data.get('transcript', '')
-                    logging.debug(f"[websocket_endpoint] transcript: {transcript}")
                     if transcript:
-                        try:
-                            logging.debug(f"[websocket_endpoint] Calling save_message for user transcript")
-                            await save_message(conversation_id, 'user', transcript)
-                            logging.debug(f"[websocket_endpoint] save_message completed for user transcript")
-                        except Exception as e:
-                            logging.error(f"[websocket_endpoint] Exception in save_message for user transcript: {e}")
+                        # Start both operations in background without awaiting
+                        async def save_and_generate_feedback():
+                            try:
+                                message_result = await save_message(conversation_id, 'user', transcript)
+                                if message_result and message_result.data:
+                                    message_id = message_result.data[0]['id']
+                                    # Start feedback generation in background
+                                    asyncio.create_task(process_feedback_background(message_id, language, level, websocket))
+                                    logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
+                            except Exception as e:
+                                logging.error(f"[WebSocket] Error in save_and_generate_feedback: {e}")
+                        
+                        # Start the background task without awaiting
+                        asyncio.create_task(save_and_generate_feedback())
                 elif data_type == 'user_message' and conversation_id:
-                    await save_message(conversation_id, 'user', data.get('content', ''))
+                    # Start saving message in background
+                    asyncio.create_task(save_message(conversation_id, 'user', data.get('content', '')))
                     
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error in websocket connection: {e}")
         finally:
-            logging.info(f"[Connection {connection_id}] Cleaning up handler and closing OpenAI connection")
+            logging.debug(f"[Connection {connection_id}] Cleaning up handler and closing OpenAI connection")
             openai_handler.cancel()
             await openai_ws.close()
             
@@ -446,7 +602,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     finally:
         if connection_established:
             try:
-                logging.info(f"[Connection {connection_id}] Closing websocket connection")
+                logging.debug(f"[Connection {connection_id}] Closing websocket connection")
                 await websocket.close()
             except RuntimeError:
                 # Ignore "Cannot call send once a close message has been sent" error
@@ -515,28 +671,30 @@ async def generate_hint(level: str, context: str, language: str, conversation_hi
         Provide a single, natural response suggestion that the user could say next. Keep it simple and appropriate for their level.
         If this is the start of the conversation, suggest an appropriate opening line."""
 
-        # Call OpenAI's chat completions API
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-4-turbo-preview",
-                "messages": [{"role": "system", "content": prompt}],
-                "temperature": 0.7,
-                "max_tokens": 150
-            }
-        )
-        
-        if response.status_code == 200:
-            hint = response.json()["choices"][0]["message"]["content"].strip()
-            logging.info(f"[generate_hint] Generated hint for {len(conversation_history)} messages: {hint}")
-            return hint
-        else:
-            logging.error(f"Error generating hint: {response.text}")
-            return "Sorry, I couldn't generate a hint at this time."
+        # Call OpenAI's chat completions API using aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4-turbo-preview",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": 150
+                }
+            ) as response:
+                if response.status != 200:
+                    response_text = await response.text()
+                    logging.error(f"Error generating hint: {response_text}")
+                    return "Sorry, I couldn't generate a hint at this time."
+                
+                response_data = await response.json()
+                hint = response_data["choices"][0]["message"]["content"].strip()
+                logging.debug(f"[generate_hint] Generated hint for {len(conversation_history)} messages: {hint}")
+                return hint
             
     except Exception as e:
         logging.error(f"Error in generate_hint: {e}")
@@ -551,13 +709,13 @@ async def get_hint(
     token: str = Query(...)
 ):
     conversation_id = request.conversation_id
-    logging.info(f"[get_hint] Incoming request: conversation_id={conversation_id}, token={token}")
+    logging.debug(f"[get_hint] Incoming request: conversation_id={conversation_id}, token={token}")
     try:
         # Verify token
         user_payload = verify_jwt(token)
         user_id = user_payload["sub"]
         
-        logging.info(f"[get_hint] Request received for conversation_id: {conversation_id}")
+        logging.debug(f"[get_hint] Request received for conversation_id: {conversation_id}")
         
         # Verify the conversation belongs to the user
         conversation = supabase.table('conversations').select('id, level, context, language').eq('id', conversation_id).eq('user_id', user_id).execute()
@@ -568,7 +726,7 @@ async def get_hint(
         # Get conversation messages
         messages = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', desc=False).execute()
         
-        logging.info(f"[get_hint] Found {len(messages.data)} messages for conversation")
+        logging.debug(f"[get_hint] Found {len(messages.data)} messages for conversation")
         
         # Generate hint
         hint = await generate_hint(
@@ -578,12 +736,83 @@ async def get_hint(
             messages.data
         )
         
-        logging.info(f"[get_hint] Generated hint: {hint}")
+        logging.debug(f"[get_hint] Generated hint: {hint}")
         
         return {"hint": hint}
         
     except Exception as e:
         logging.error(f"[get_hint] Error getting hint: {e}")
+        raise
+
+# Feedback generation models
+class Mistake(BaseModel):
+    category: str
+    type: str
+    error: str
+    correction: str
+    explanation: str
+    severity: str
+    languageFeatureTags: Optional[List[str]] = None
+
+class FeedbackResponse(BaseModel):
+    messageId: str
+    originalMessage: str
+    mistakes: List[Mistake]
+
+def format_conversation_context(messages: List[dict]) -> str:
+    """Format conversation messages for context."""
+    formatted = []
+    for msg in reversed(messages):  # Reverse to get chronological order
+        role = "Student" if msg['role'] == 'user' else "Teacher"
+        formatted.append(f"{role}: {msg['content']}")
+    return "\n".join(formatted)
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+
+@app.post("/api/feedback")
+async def get_feedback(
+    request: FeedbackRequest,
+    token: str = Query(...)
+):
+    """Get language learning feedback for a message."""
+    try:
+        # Verify token
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Get the message to verify ownership
+        message = supabase.table('messages').select('conversation_id, content').eq('id', request.message_id).execute()
+        if not message.data:
+            raise Exception("Message not found")
+            
+        # Verify the conversation belongs to the user
+        conversation = supabase.table('conversations').select('language, level').eq('id', message.data[0]['conversation_id']).eq('user_id', user_id).execute()
+        if not conversation.data:
+            raise Exception("Conversation not found or access denied")
+            
+        # Create a dummy WebSocket for the feedback response
+        class DummyWebSocket:
+            async def send_json(self, data):
+                self.last_response = data
+                
+        dummy_ws = DummyWebSocket()
+        
+        # Generate feedback
+        await process_feedback_background(
+            request.message_id,
+            conversation.data[0]['language'],
+            conversation.data[0]['level'],
+            dummy_ws
+        )
+        
+        if hasattr(dummy_ws, 'last_response'):
+            return dummy_ws.last_response
+        else:
+            raise Exception("Failed to generate feedback")
+        
+    except Exception as e:
+        logging.error(f"Error getting feedback: {e}")
         raise
 
 if __name__ == "__main__":
