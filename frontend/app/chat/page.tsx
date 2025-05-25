@@ -43,6 +43,10 @@ export default function Chat() {
   const [conversation_id, setConversationId] = useState<string | null>(null);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, string>>({});
+  const [sessionReady, setSessionReady] = useState(false);
+  const [conversationStarted, setConversationStarted] = useState(false);
+  const [isSessionLoading, setIsSessionLoading] = useState(false);
+  const [isMicPrompted, setIsMicPrompted] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -104,6 +108,27 @@ export default function Chat() {
     initializeChat();
   }, [router, searchParams]);
 
+  useEffect(() => {
+    // Parse context, language, level from query params
+    const context = searchParams.get('context') || 'restaurant';
+    const language = searchParams.get('language') || 'en';
+    const level = searchParams.get('level') || 'A1';
+    setSelectedContext(context);
+    setSelectedLanguage(language);
+    setSelectedLevel(level);
+    setIsSessionLoading(true);
+    setSessionReady(false);
+    setConversationStarted(false);
+    // Simulate sending session config to backend/OpenAI
+    // In real implementation, send session.update and wait for confirmation
+    console.log('[Chat] Sending session config to backend/OpenAI:', { context, language, level });
+    setTimeout(() => {
+      setSessionReady(true);
+      setIsSessionLoading(false);
+      console.log('[Chat] Session config confirmed, sessionReady=true');
+    }, 1200); // Simulate async session config
+  }, [searchParams]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -132,6 +157,11 @@ export default function Chat() {
   // Function to play next chunk in buffer
   const playNextChunk = async () => {
     if (isPlayingRef.current || audioBufferRef.current.length === 0) return;
+
+    // Defensive: Resume AudioContext if suspended
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
 
     isPlayingRef.current = true;
     const audioData = audioBufferRef.current.shift();
@@ -180,42 +210,57 @@ export default function Chat() {
     }
   };
 
+  // Step 1: User clicks 'Start Conversation'
+  const handleStartConversation = async () => {
+    console.log('[Chat] Start Conversation clicked');
+    setIsSessionLoading(true);
+    // Unlock audio playback
+    initAudioContext();
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+    setConversationStarted(true);
+    // WebSocket/session setup will proceed in useEffect
+  };
+
+  // Step 2: WebSocket/session setup after conversationStarted
   useEffect(() => {
+    if (!conversationStarted) return;
     let ws: WebSocket | null = null;
     let isMounted = true;
-
-    async function connectWS() {
-      if (ws?.readyState === WebSocket.OPEN) {
-        console.log('WebSocket already connected');
-        return;
-      }
-
+    (async function connectWS() {
       try {
         const { data } = await supabase.auth.getSession();
         const token = data?.session?.access_token;
-        
         if (!isMounted) return;
-
         ws = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
-        
         ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.log('[Chat] WebSocket connected');
           setIsConnected(true);
           setError(null);
-          
-          // Send initial configuration
+          // Send initial config (init message)
           ws?.send(JSON.stringify({
             type: 'init',
             language: selectedLanguage,
             level: selectedLevel,
             context: selectedContext
           }));
+          console.log('[Chat] Sent init message:', { language: selectedLanguage, level: selectedLevel, context: selectedContext });
         };
-
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          // console.debug('Received WebSocket message:', data); // Lowered log level to debug or comment out
-
+          console.warn('[Chat] Received event:', data);
+          if (data.type === 'session.created') {
+            if (data.session && data.session.conversation_id) {
+              setConversationId(data.session.conversation_id);
+              setSessionReady(true);
+              setIsSessionLoading(false);
+              console.log('[Chat] Session ready, conversation_id:', data.session.conversation_id);
+            } else {
+              setError('Session creation failed');
+              setIsSessionLoading(false);
+            }
+          }
           if (data.type === 'feedback.generated') {
             const feedback: Feedback = {
               messageId: data.messageId,
@@ -248,10 +293,6 @@ export default function Chat() {
             });
           }
           switch (data.type) {
-            case 'session.created': {
-              setConversationId(data.session.conversation_id);
-              break;
-            }
             case 'conversation.item.input_audio_transcription.completed': {
               if (!data.message_id) {
                 // Ignore events without a valid message_id
@@ -307,84 +348,84 @@ export default function Chat() {
               break;
           }
         };
-
         ws.onclose = () => {
-          console.log('WebSocket disconnected');
           setIsConnected(false);
           setError('Disconnected from server');
         };
-
         ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
           setIsConnected(false);
           setError('WebSocket connection error');
         };
-
         wsRef.current = ws;
       } catch (error) {
-        console.error('WebSocket connection error:', error);
         setError('Failed to connect to server');
         setIsConnected(false);
+        setIsSessionLoading(false);
       }
-    }
-
-    connectWS();
-
+    })();
     return () => {
       isMounted = false;
-      if (ws) {
-        ws.close();
-      }
+      if (ws) ws.close();
     };
-  }, [selectedLanguage, selectedLevel, selectedContext]);
+  }, [conversationStarted, selectedLanguage, selectedLevel, selectedContext]);
+
+  // Step 3: User clicks 'Start Recording' for mic access
+  const handleStartRecording = async () => {
+    setIsMicPrompted(true);
+    await startRecording();
+  };
 
   const startRecording = async () => {
     try {
+      // Ensure AudioContext is initialized and resumed on user gesture
+      initAudioContext();
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Create AudioContext with the correct sample rate
-      audioContextRef.current = new AudioContext({
-        sampleRate: 24000 // OpenAI expects 24kHz
-      });
-
       // Create audio source from the stream
-      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const source = audioContextRef.current?.createMediaStreamSource(stream);
       
       // Create a script processor to handle the audio data
-      const processor = audioContextRef.current.createScriptProcessor(1024, 1, 1);
+      const processor = audioContextRef.current?.createScriptProcessor(1024, 1, 1);
       
-      processor.onaudioprocess = (e) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          // Get the audio data
-          const inputData = e.inputBuffer.getChannelData(0);
-          
-          // Convert Float32Array to Int16Array
-          const pcmData = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            // Convert float to int16
-            const s = Math.max(-1, Math.min(1, inputData[i]));
-            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      if (processor) {
+        processor.onaudioprocess = (e) => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            // Get the audio data
+            const inputData = e.inputBuffer.getChannelData(0);
+            
+            // Convert Float32Array to Int16Array
+            const pcmData = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+              // Convert float to int16
+              const s = Math.max(-1, Math.min(1, inputData[i]));
+              pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            
+            // Convert to base64
+            const uint8Array = new Uint8Array(pcmData.buffer);
+            const base64Audio = btoa(
+              Array.from(uint8Array)
+                .map(byte => String.fromCharCode(byte))
+                .join('')
+            );
+            
+            // Send to backend
+            wsRef.current.send(JSON.stringify({
+              type: 'input_audio_buffer.append',
+              audio: base64Audio
+            }));
           }
-          
-          // Convert to base64
-          const uint8Array = new Uint8Array(pcmData.buffer);
-          const base64Audio = btoa(
-            Array.from(uint8Array)
-              .map(byte => String.fromCharCode(byte))
-              .join('')
-          );
-          
-          // Send to backend
-          wsRef.current.send(JSON.stringify({
-            type: 'input_audio_buffer.append',
-            audio: base64Audio
-          }));
-        }
-      };
+        };
+      }
 
       // Connect the nodes
-      source.connect(processor);
-      processor.connect(audioContextRef.current.destination);
+      if (source && processor && audioContextRef.current) {
+        source.connect(processor);
+        processor.connect(audioContextRef.current.destination);
+      }
 
       setIsRecording(true);
       setMessages(prev => [...prev, {
@@ -421,6 +462,7 @@ export default function Chat() {
   };
 
   const getHint = async () => {
+    console.warn('getHint called, conversation_id:', conversation_id);
     if (!conversation_id) {
       setError('No active conversation found');
       return;
@@ -478,6 +520,39 @@ export default function Chat() {
     }
   };
 
+  // UI rendering logic
+  if (!conversationStarted) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen">
+        <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center">
+          <h2 className="text-2xl font-bold mb-2">Ready to begin?</h2>
+          <p className="mb-4 text-gray-700">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{contextTitles[selectedContext]}</b>.</p>
+          <button
+            onClick={handleStartConversation}
+            className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+          >
+            Start Conversation
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (isSessionLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
+        <span className="ml-4 text-orange-600 font-semibold">Setting up your session...</span>
+      </div>
+    );
+  }
+  if (!sessionReady) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
+        <span className="ml-4 text-orange-600 font-semibold">Waiting for session confirmation...</span>
+      </div>
+    );
+  }
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -585,12 +660,21 @@ export default function Chat() {
       {/* Controls */}
       <div className="bg-white/80 backdrop-blur-sm border-t border-orange-100 p-4">
         <div className="max-w-6xl mx-auto flex justify-center">
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
-          >
-            {isRecording ? 'Stop Recording' : 'Start Recording'}
-          </button>
+          {!isRecording ? (
+            <button
+              onClick={handleStartRecording}
+              className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+            >
+              Start Recording
+            </button>
+          ) : (
+            <button
+              onClick={stopRecording}
+              className="px-8 py-3 rounded-full text-white font-medium bg-orange-400 hover:bg-orange-500 transition-colors"
+            >
+              Stop Recording
+            </button>
+          )}
         </div>
       </div>
 

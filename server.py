@@ -502,12 +502,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     connection_id = str(uuid.uuid4())[:8]
     connection_established = False
     conversation_id = None
-    
+    user_id = None
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
+            logging.info(f"[WebSocket] New connection: connection_id={connection_id}, user_id={user_id}")
             logging.debug(f"[Connection {connection_id}] New websocket connection attempt from user {user_id}")
         except Exception as e:
             logging.debug(f"[Connection {connection_id}] Authentication failed: {str(e)}")
