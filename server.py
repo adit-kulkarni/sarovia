@@ -441,21 +441,25 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
-                    logging.info(f"[WebSocket] Received user message: {transcript}")
-                    # Start both operations in background without awaiting
-                    async def save_and_generate_feedback():
+                    async def save_and_generate_feedback_and_emit():
                         try:
                             message_result = await save_message(conversation_id, 'user', transcript)
                             if message_result and message_result.data:
                                 message_id = message_result.data[0]['id']
+                                # Emit event to frontend with the database message id
+                                logging.info(f"[WebSocket] Emitting user message event for message_id={message_id}, transcript={transcript}")
+                                await client_ws.send_json({
+                                    "type": "conversation.item.input_audio_transcription.completed",
+                                    "message_id": message_id,
+                                    "transcript": transcript
+                                })
                                 # Start feedback generation in background
                                 asyncio.create_task(process_feedback_background(message_id, language, level, client_ws))
                                 logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
                         except Exception as e:
-                            logging.error(f"[WebSocket] Error in save_and_generate_feedback: {e}")
-                    
+                            logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
                     # Start the background task without awaiting
-                    asyncio.create_task(save_and_generate_feedback())
+                    asyncio.create_task(save_and_generate_feedback_and_emit())
 
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
@@ -572,20 +576,25 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 elif data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                     transcript = data.get('transcript', '')
                     if transcript:
-                        # Start both operations in background without awaiting
-                        async def save_and_generate_feedback():
+                        async def save_and_generate_feedback_and_emit():
                             try:
                                 message_result = await save_message(conversation_id, 'user', transcript)
                                 if message_result and message_result.data:
                                     message_id = message_result.data[0]['id']
+                                    # Emit event to frontend with the database message id
+                                    logging.info(f"[WebSocket] Emitting user message event for message_id={message_id}, transcript={transcript}")
+                                    await websocket.send_json({
+                                        "type": "conversation.item.input_audio_transcription.completed",
+                                        "message_id": message_id,
+                                        "transcript": transcript
+                                    })
                                     # Start feedback generation in background
                                     asyncio.create_task(process_feedback_background(message_id, language, level, websocket))
                                     logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
                             except Exception as e:
-                                logging.error(f"[WebSocket] Error in save_and_generate_feedback: {e}")
-                        
+                                logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
                         # Start the background task without awaiting
-                        asyncio.create_task(save_and_generate_feedback())
+                        asyncio.create_task(save_and_generate_feedback_and_emit())
                 elif data_type == 'user_message' and conversation_id:
                     # Start saving message in background
                     asyncio.create_task(save_message(conversation_id, 'user', data.get('content', '')))

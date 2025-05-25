@@ -4,13 +4,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
 import ConversationHistory from '../components/ConversationHistory';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  isStreaming?: boolean;
-}
+import { Feedback } from '../types/feedback';
+import FeedbackPanel from '../components/FeedbackPanel';
+import ChatBubble from '../components/ChatBubble';
+import type { Message } from '../types/feedback';
 
 const contextTitles: { [key: string]: string } = {
   restaurant: 'Ordering at a Restaurant',
@@ -44,6 +41,8 @@ export default function Chat() {
   const [currentHint, setCurrentHint] = useState<string | null>(null);
   const [isLoadingHint, setIsLoadingHint] = useState(false);
   const [conversation_id, setConversationId] = useState<string | null>(null);
+  const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
+  const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, string>>({});
   
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -195,129 +194,93 @@ export default function Chat() {
         const { data } = await supabase.auth.getSession();
         const token = data?.session?.access_token;
         
-        if (!isMounted) return; // Don't create connection if unmounted
+        if (!isMounted) return;
 
         ws = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
-        wsRef.current = ws;
-
-        if (!ws) return;
         
         ws.onopen = () => {
-          if (!isMounted) return;
+          console.log('WebSocket connected');
           setIsConnected(true);
-          ws!.send(JSON.stringify({
-            type: 'session.init',
+          setError(null);
+          
+          // Send initial configuration
+          ws?.send(JSON.stringify({
+            type: 'init',
+            language: selectedLanguage,
             level: selectedLevel,
-            context: selectedContext,
-            language: selectedLanguage
+            context: selectedContext
           }));
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `Connected to backend WebSocket. Starting ${languageNames[selectedLanguage]} conversation practice.`,
-            timestamp: new Date().toISOString()
-          }]);
-          initAudioContext();
-        };
-
-        ws.onclose = () => {
-          if (!isMounted) return;
-          setIsConnected(false);
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: 'Disconnected from backend WebSocket',
-            timestamp: new Date().toISOString()
-          }]);
-        };
-
-        ws.onerror = (error) => {
-          if (!isMounted) return;
-          setIsConnected(false);
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `WebSocket error: ${error}`,
-            timestamp: new Date().toISOString()
-          }]);
         };
 
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          console.log('WebSocket message received:', data);
-          
+          // console.debug('Received WebSocket message:', data); // Lowered log level to debug or comment out
+
+          if (data.type === 'feedback.generated') {
+            const feedback: Feedback = {
+              messageId: data.messageId,
+              originalMessage: data.feedback.originalMessage,
+              mistakes: data.feedback.mistakes,
+              hasMistakes: data.hasMistakes,
+              timestamp: new Date().toISOString()
+            };
+            console.log('Received feedback for messageId:', data.messageId, feedback);
+            setFeedbacks(prev => [...prev, feedback]);
+            if (data.hasMistakes) {
+              setMessageFeedbacks(prev => ({
+                ...prev,
+                [data.messageId]: data.messageId
+              }));
+            }
+            setMessages(prevMessages => {
+              const allIds = prevMessages.map(m => m.id);
+              console.log('Current message ids:', allIds);
+              const updated = prevMessages.map(msg => {
+                if (msg.id === data.messageId && msg.role === 'user') {
+                  const updatedMsg = { ...msg, feedback };
+                  console.log('Attaching feedback to message:', updatedMsg);
+                  return updatedMsg;
+                }
+                return msg;
+              });
+              console.log('Updated messages after feedback:', updated);
+              return updated;
+            });
+          }
           switch (data.type) {
             case 'session.created': {
-              setIsConnected(true);
-              let convId = null;
-              if (data.session && data.session.conversation_id) {
-                convId = data.session.conversation_id;
-              } else if (data.conversation_id) {
-                convId = data.conversation_id;
-              }
-              if (convId && !conversation_id) {
-                console.log('Setting conversation_id:', convId);
-                setConversationId(convId);
-              }
+              setConversationId(data.session.conversation_id);
               break;
             }
-            case 'conversation.item.input_audio_transcription.completed':
+            case 'conversation.item.input_audio_transcription.completed': {
+              if (!data.message_id) {
+                // Ignore events without a valid message_id
+                return;
+              }
+              console.log('Handler fired for message_id:', data.message_id, 'transcript:', data.transcript);
+              setMessages(prev => {
+                if (prev.some(msg => msg.id === data.message_id && msg.role === 'user')) {
+                  return prev;
+                }
+                const newMsg: Message = {
+                  id: data.message_id,
+                  role: 'user',
+                  content: data.transcript,
+                  timestamp: new Date().toISOString()
+                };
+                console.log('Adding user message with id:', newMsg.id);
+                return [...prev, newMsg];
+              });
+              break;
+            }
+            case 'response.audio_transcript.done': {
               setMessages(prev => [...prev, {
-                role: 'user',
+                role: 'assistant',
                 content: data.transcript,
                 timestamp: new Date().toISOString()
               }]);
               break;
-            case 'response.audio_transcript.delta': {
-              setMessages(prev => {
-                // If no streaming message, create one
-                if (
-                  currentStreamingMessageRef.current === null ||
-                  currentStreamingMessageRef.current < 0 ||
-                  currentStreamingMessageRef.current >= prev.length ||
-                  !prev[currentStreamingMessageRef.current].isStreaming
-                ) {
-                  // Start a new streaming message
-                  const newIndex = prev.length;
-                  currentStreamingMessageRef.current = newIndex;
-                  return [
-                    ...prev,
-                    {
-                      role: 'assistant' as const,
-                      content: data.delta,
-                      timestamp: new Date().toISOString(),
-                      isStreaming: true
-                    }
-                  ];
-                } else {
-                  // Append to the current streaming message
-                  const idx = currentStreamingMessageRef.current;
-                  const newMessages = [...prev];
-                  newMessages[idx] = {
-                    ...newMessages[idx],
-                    content: newMessages[idx].content + data.delta
-                  };
-                  return newMessages;
-                }
-              });
-              break;
             }
-            case 'response.audio_transcript.done':
-              setMessages(prev => {
-                if (
-                  currentStreamingMessageRef.current !== null &&
-                  currentStreamingMessageRef.current >= 0 &&
-                  currentStreamingMessageRef.current < prev.length
-                ) {
-                  const idx = currentStreamingMessageRef.current;
-                  const newMessages = [...prev];
-                  newMessages[idx] = {
-                    ...newMessages[idx],
-                    isStreaming: false
-                  };
-                  currentStreamingMessageRef.current = null;
-                  return newMessages;
-                }
-                return prev;
-              });
-              break;
             case 'input_audio_buffer.speech_started':
               // Stop AI audio playback when user starts speaking
               stopAudioPlayback();
@@ -344,30 +307,36 @@ export default function Chat() {
               break;
           }
         };
+
+        ws.onclose = () => {
+          console.log('WebSocket disconnected');
+          setIsConnected(false);
+          setError('Disconnected from server');
+        };
+
+        ws.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          setIsConnected(false);
+          setError('WebSocket connection error');
+        };
+
+        wsRef.current = ws;
       } catch (error) {
-        console.error('Error establishing WebSocket connection:', error);
+        console.error('WebSocket connection error:', error);
+        setError('Failed to connect to server');
+        setIsConnected(false);
       }
     }
 
     connectWS();
 
-    // Cleanup function
     return () => {
       isMounted = false;
       if (ws) {
-        console.log('Cleaning up WebSocket connection');
         ws.close();
       }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
-      stopAudioPlayback();
     };
-  }, [selectedContext, selectedLanguage, selectedLevel]); // Dependencies that should trigger reconnection
+  }, [selectedLanguage, selectedLevel, selectedContext]);
 
   const startRecording = async () => {
     try {
@@ -501,6 +470,14 @@ export default function Chat() {
     }
   };
 
+  const handleFeedbackClick = (messageId: string) => {
+    // Scroll to the message with feedback
+    const messageElement = document.getElementById(`message-${messageId}`);
+    if (messageElement) {
+      messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -545,54 +522,63 @@ export default function Chat() {
             {messages.map((message, index) => (
               <div
                 key={index}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                id={message.id ? `message-${message.id}` : undefined}
               >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                    message.role === 'user'
-                      ? 'bg-orange-500 text-white rounded-br-none'
-                      : 'bg-gray-100 text-gray-800 rounded-bl-none'
-                  }`}
-                >
-                  <p className="text-sm">{message.content}</p>
-                  <span className="text-xs opacity-70 mt-1 block">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
+                <ChatBubble
+                  message={message}
+                  hasFeedback={message.id ? !!messageFeedbacks[message.id] : false}
+                  onFeedbackClick={() => message.id && handleFeedbackClick(message.id)}
+                />
               </div>
             ))}
             <div ref={messagesEndRef} />
           </div>
         </div>
 
-        {/* Hint Panel */}
-        <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 p-4 flex flex-col">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-800">Conversation Hints</h3>
-            <button
-              onClick={getHint}
-              disabled={isLoadingHint}
-              className="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50"
-            >
-              {isLoadingHint ? (
-                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
-              ) : (
-                'Get Hint'
+        {/* Right Panel */}
+        <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 flex flex-col">
+          {/* Hints Section */}
+          <div className="flex-none p-4 border-b border-orange-100">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Conversation Hints</h3>
+              <button
+                onClick={getHint}
+                disabled={isLoadingHint}
+                className="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50"
+              >
+                {isLoadingHint ? (
+                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                ) : (
+                  'Get Hint'
+                )}
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto max-h-[200px]">
+              {currentHint && (
+                <div className="bg-orange-50 rounded-lg p-4 inline-block w-auto max-w-full mb-4">
+                  <p className="text-gray-800">{currentHint}</p>
+                </div>
               )}
-            </button>
+              
+              {!currentHint && !isLoadingHint && (
+                <div className="flex items-center justify-center text-gray-500">
+                  <p className="text-center">Click "Get Hint" to receive a suggestion for your next response</p>
+                </div>
+              )}
+            </div>
           </div>
-          
-          {currentHint && (
-            <div className="bg-orange-50 rounded-lg p-4 inline-block w-auto max-w-full mb-4">
-              <p className="text-gray-800">{currentHint}</p>
+
+          {/* Feedback Section */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="p-4">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Feedback</h3>
+              <FeedbackPanel
+                feedbacks={feedbacks}
+                onFeedbackClick={handleFeedbackClick}
+              />
             </div>
-          )}
-          
-          {!currentHint && !isLoadingHint && (
-            <div className="flex-1 flex items-center justify-center text-gray-500">
-              <p className="text-center">Click "Get Hint" to receive a suggestion for your next response</p>
-            </div>
-          )}
+          </div>
         </div>
       </div>
 
