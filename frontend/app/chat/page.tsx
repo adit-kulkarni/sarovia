@@ -249,16 +249,25 @@ export default function Chat() {
         };
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          console.warn('[Chat] Received event:', data);
+          const now = new Date().toISOString();
+          console.warn(`[Chat][${now}] Received event:`, data);
           if (data.type === 'session.created') {
+            console.warn(`[Chat][${now}] session.created event received:`, JSON.stringify(data));
             if (data.session && data.session.conversation_id) {
-              setConversationId(data.session.conversation_id);
-              setSessionReady(true);
-              setIsSessionLoading(false);
-              console.log('[Chat] Session ready, conversation_id:', data.session.conversation_id);
+              if (!sessionReady) {
+                setConversationId(data.session.conversation_id);
+                setSessionReady(true);
+                setIsSessionLoading(false);
+                console.log(`[Chat][${now}] Session ready, conversation_id:`, data.session.conversation_id);
+              } else {
+                console.warn(`[Chat][${now}] Duplicate session.created event received after sessionReady was already set. Data:`, JSON.stringify(data));
+              }
             } else {
-              setError('Session creation failed');
-              setIsSessionLoading(false);
+              console.error(`[Chat][${now}] Malformed session.created event (missing conversation_id):`, JSON.stringify(data));
+              if (!sessionReady) {
+                setError('Session creation failed');
+                setIsSessionLoading(false);
+              }
             }
           }
           if (data.type === 'feedback.generated') {
