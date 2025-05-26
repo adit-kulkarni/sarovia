@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import MistakeCategoriesChart from '../components/MistakeCategoriesChart';
+import SeverityAnalysisChart from '../components/SeverityAnalysisChart';
+import CommonMistakesList from '../components/CommonMistakesList';
+import ProgressOverTimeChart from '../components/ProgressOverTimeChart';
+import ScaledMistakesPerConversationChart from '../components/ScaledMistakesPerConversationChart';
+import LanguageFeaturesHeatmap from '../components/LanguageFeaturesHeatmap';
+import CorrectionPatterns from '../components/CorrectionPatterns';
+import ProficiencyLevelChart from '../components/ProficiencyLevelChart';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,6 +32,7 @@ interface Feedback {
   mistakes: Mistake[];
   hasMistakes: boolean;
   timestamp: string;
+  created_at?: string;
 }
 
 const ProgressPage = () => {
@@ -105,29 +114,34 @@ const ProgressPage = () => {
         {/* Left Column */}
         <div className="space-y-6">
           {/* 1. Mistake Categories Chart */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
             <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
-            <div className="h-64">
-              {/* TODO: Implement pie chart */}
-              <p className="text-gray-500 text-center">Pie chart showing distribution of mistake categories</p>
+            <div className="flex-1 overflow-hidden">
+              <MistakeCategoriesChart 
+                mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
+              />
             </div>
           </div>
 
           {/* 2. Severity Analysis */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
             <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
-            <div className="h-64">
-              {/* TODO: Implement stacked bar chart */}
-              <p className="text-gray-500 text-center">Stacked bar chart showing severity distribution</p>
+            <div className="flex-1 overflow-hidden">
+              <SeverityAnalysisChart 
+                mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
+                totalConversations={feedbacks.length}
+                totalMessages={feedbacks.length}
+              />
             </div>
           </div>
 
           {/* 3. Common Mistake Types */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
             <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
-            <div className="space-y-4">
-              {/* TODO: Implement top mistakes list */}
-              <p className="text-gray-500 text-center">List of most common mistake types</p>
+            <div className="flex-1 overflow-y-auto">
+              <CommonMistakesList 
+                mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
+              />
             </div>
           </div>
         </div>
@@ -135,67 +149,75 @@ const ProgressPage = () => {
         {/* Right Column */}
         <div className="space-y-6">
           {/* 4. Progress Over Time */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
             <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
-            <div className="h-64">
-              {/* TODO: Implement line graph */}
-              <p className="text-gray-500 text-center">Line graph showing progress over time</p>
+            <div className="flex-1 overflow-hidden">
+              <ProgressOverTimeChart 
+                mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
+                feedbacks={feedbacks.map(f => ({
+                  timestamp: f.created_at || f.timestamp,
+                  mistakes: f.mistakes
+                }))}
+              />
             </div>
           </div>
 
           {/* 5. Language Feature Analysis */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
             <h3 className="text-lg font-medium mb-4">Language Features</h3>
-            <div className="h-64">
-              {/* TODO: Implement heat map */}
-              <p className="text-gray-500 text-center">Heat map of language features</p>
+            <div className="flex-1 overflow-y-auto">
+              <LanguageFeaturesHeatmap 
+                mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
+              />
             </div>
           </div>
 
           {/* 6. Context Performance */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-medium mb-4">Context Performance</h3>
-            <div className="space-y-4">
-              {/* TODO: Implement context breakdown */}
-              <p className="text-gray-500 text-center">Performance breakdown by context</p>
+          <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+            <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
+            <div className="flex-1 overflow-hidden">
+              <ScaledMistakesPerConversationChart feedbacks={feedbacks} />
             </div>
           </div>
         </div>
       </div>
 
       {/* Bottom Section */}
-      <div className="mt-6">
+      <div className="mt-6 space-y-6">
         {/* 7. Correction Patterns */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
+        <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
           <h3 className="text-lg font-medium mb-4">Correction Patterns</h3>
-          <div className="space-y-4">
-            {/* TODO: Implement correction patterns */}
-            <p className="text-gray-500 text-center">Most common corrections and patterns</p>
+          <div className="flex-1 overflow-y-auto">
+            <CorrectionPatterns 
+              mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
+            />
           </div>
         </div>
 
         {/* 8. Learning Progress Indicators */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
+        <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
           <h3 className="text-lg font-medium mb-4">Learning Progress</h3>
-          <div className="space-y-4">
-            {/* TODO: Implement progress indicators */}
-            <p className="text-gray-500 text-center">Progress bars and achievement badges</p>
+          <div className="flex-1 overflow-y-auto">
+            <ProficiencyLevelChart 
+              mistakes={feedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
+              originalMessages={feedbacks.map(f => f.originalMessage)}
+            />
           </div>
         </div>
 
         {/* 9. Personalized Insights */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
+        <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
           <h3 className="text-lg font-medium mb-4">Learning Insights</h3>
-          <div className="space-y-4">
+          <div className="flex-1 overflow-y-auto">
             {/* TODO: Implement AI-generated insights */}
             <p className="text-gray-500 text-center">AI-generated recommendations and insights</p>
           </div>
         </div>
 
         {/* 10. Comparative Analysis */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
           <h3 className="text-lg font-medium mb-4">Comparative Analysis</h3>
-          <div className="space-y-4">
+          <div className="flex-1 overflow-y-auto">
             {/* TODO: Implement comparative analysis */}
             <p className="text-gray-500 text-center">Performance comparison with previous periods and peers</p>
           </div>
