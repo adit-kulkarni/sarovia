@@ -93,10 +93,77 @@ export default function Chat() {
         const context = searchParams.get('context') || 'restaurant';
         const language = searchParams.get('language') || 'en';
         const level = searchParams.get('level') || 'A1';
+        const conversationId = searchParams.get('conversation');
 
         setSelectedContext(context);
         setSelectedLanguage(language);
         setSelectedLevel(level);
+
+        // If we have a conversation ID, load the existing conversation
+        if (conversationId) {
+          setConversationId(conversationId);
+          setConversationStarted(true);
+          setSessionReady(true);
+
+          // Fetch messages for this conversation
+          const { data: messagesData, error: messagesError } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', conversationId)
+            .order('created_at', { ascending: true });
+
+          if (messagesError) throw messagesError;
+
+          // Fetch feedback for these messages
+          const { data: feedbackData, error: feedbackError } = await supabase
+            .from('message_feedback')
+            .select('*')
+            .in('message_id', messagesData.map(m => m.id));
+
+          if (feedbackError) throw feedbackError;
+
+          // Convert messages to the correct format
+          const formattedMessages = messagesData.map(msg => {
+            // Find feedback for this message
+            const messageFeedback = feedbackData.find(f => f.message_id === msg.id);
+            return {
+              id: msg.id,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.created_at,
+              feedback: messageFeedback ? {
+                messageId: messageFeedback.message_id,
+                originalMessage: messageFeedback.original_message,
+                mistakes: messageFeedback.mistakes,
+                hasMistakes: messageFeedback.mistakes.length > 0,
+                timestamp: messageFeedback.created_at
+              } : undefined
+            };
+          });
+
+          setMessages(formattedMessages);
+
+          // Process feedback
+          const feedbacksList: Feedback[] = feedbackData.map(f => ({
+            messageId: f.message_id,
+            originalMessage: f.original_message,
+            mistakes: f.mistakes,
+            hasMistakes: f.mistakes.length > 0,
+            timestamp: f.created_at
+          }));
+
+          setFeedbacks(feedbacksList);
+          
+          // Set message feedbacks
+          const messageFeedbackMap: Record<string, string> = {};
+          feedbacksList.forEach(f => {
+            if (f.hasMistakes) {
+              messageFeedbackMap[f.messageId] = f.messageId;
+            }
+          });
+          setMessageFeedbacks(messageFeedbackMap);
+        }
+
         setIsLoading(false);
       } catch (err) {
         setError('Failed to initialize chat');

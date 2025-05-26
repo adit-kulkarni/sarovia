@@ -2,77 +2,61 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import Link from 'next/link';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-interface Conversation {
-  id: string;
-  created_at: string;
-  context: string;
-  language: string;
-  level: string;
-  messages: {
-    content: string;
-    role: string;
-    created_at: string;
-  }[];
+interface Mistake {
+  category: string;
+  type: string;
+  error: string;
+  correction: string;
+  explanation: string;
+  severity: 'minor' | 'moderate' | 'critical';
+  languageFeatureTags?: string[];
+}
+
+interface Feedback {
+  messageId: string;
+  originalMessage: string;
+  mistakes: Mistake[];
+  hasMistakes: boolean;
+  timestamp: string;
 }
 
 const ProgressPage = () => {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
 
   useEffect(() => {
-    const fetchConversations = async () => {
+    const fetchFeedback = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
+        // Fetch feedback data from message_feedback table
         const { data, error } = await supabase
-          .from('conversations')
-          .select(`
-            id,
-            created_at,
-            context,
-            language,
-            level,
-            messages (
-              content,
-              role,
-              created_at
-            )
-          `)
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10);
+          .from('message_feedback')
+          .select('*')
+          .order('created_at', { ascending: false });
 
         if (error) throw error;
-        setConversations(data || []);
+        setFeedbacks(data || []);
       } catch (error) {
-        console.error('Error fetching conversations:', error);
+        console.error('Error fetching feedback:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchConversations();
+    fetchFeedback();
   }, []);
-
-  // Calculate stats from conversations
-  const stats = {
-    totalConversations: conversations.length,
-    totalMinutes: conversations.length * 15, // Assuming average 15 minutes per conversation
-    averageScore: 85, // This would need to be calculated from actual scores
-    streak: 7, // This would need to be calculated from actual data
-  };
 
   if (loading) {
     return (
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-7xl mx-auto p-6">
         <h1 className="text-2xl font-bold mb-6">Learning Progress</h1>
         <div className="text-center">Loading...</div>
       </div>
@@ -80,67 +64,141 @@ const ProgressPage = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="max-w-7xl mx-auto p-6">
       <h1 className="text-2xl font-bold mb-6">Learning Progress</h1>
 
-      {/* Stats Overview */}
+      {/* Top Stats Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-sm font-medium text-gray-500">Total Conversations</h3>
-          <p className="text-3xl font-bold text-gray-900">{stats.totalConversations}</p>
+          <p className="text-3xl font-bold text-gray-900">{feedbacks.length}</p>
         </div>
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500">Total Minutes</h3>
-          <p className="text-3xl font-bold text-gray-900">{stats.totalMinutes}</p>
+          <h3 className="text-sm font-medium text-gray-500">Total Mistakes</h3>
+          <p className="text-3xl font-bold text-gray-900">
+            {feedbacks.reduce((acc, f) => acc + f.mistakes.length, 0)}
+          </p>
         </div>
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500">Average Score</h3>
-          <p className="text-3xl font-bold text-gray-900">{stats.averageScore}%</p>
+          <h3 className="text-sm font-medium text-gray-500">Perfect Messages</h3>
+          <p className="text-3xl font-bold text-gray-900">
+            {feedbacks.filter(f => !f.hasMistakes).length}
+          </p>
         </div>
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500">Current Streak</h3>
-          <p className="text-3xl font-bold text-gray-900">{stats.streak} days</p>
+          <h3 className="text-sm font-medium text-gray-500">Average Severity</h3>
+          <p className="text-3xl font-bold text-gray-900">
+            {/* Calculate average severity */}
+            {(() => {
+              const severityMap = { minor: 1, moderate: 2, critical: 3 };
+              const total = feedbacks.reduce((acc, f) => 
+                acc + f.mistakes.reduce((sum, m) => sum + severityMap[m.severity], 0), 0);
+              const count = feedbacks.reduce((acc, f) => acc + f.mistakes.length, 0);
+              return count ? (total / count).toFixed(1) : '0';
+            })()}
+          </p>
         </div>
       </div>
 
-      {/* Recent Conversations */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-medium">Recent Conversations</h2>
+      {/* Main Analytics Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left Column */}
+        <div className="space-y-6">
+          {/* 1. Mistake Categories Chart */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
+            <div className="h-64">
+              {/* TODO: Implement pie chart */}
+              <p className="text-gray-500 text-center">Pie chart showing distribution of mistake categories</p>
+            </div>
+          </div>
+
+          {/* 2. Severity Analysis */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
+            <div className="h-64">
+              {/* TODO: Implement stacked bar chart */}
+              <p className="text-gray-500 text-center">Stacked bar chart showing severity distribution</p>
+            </div>
+          </div>
+
+          {/* 3. Common Mistake Types */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
+            <div className="space-y-4">
+              {/* TODO: Implement top mistakes list */}
+              <p className="text-gray-500 text-center">List of most common mistake types</p>
+            </div>
+          </div>
         </div>
-        <div className="divide-y divide-gray-200">
-          {conversations.map((conversation) => (
-            <Link
-              key={conversation.id}
-              href={`/conversations/${conversation.id}`}
-              className="block hover:bg-blue-50 transition rounded-lg p-2"
-            >
-              <div className="p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="text-lg font-medium">{conversation.context}</h3>
-                    <p className="text-sm text-gray-500">
-                      {new Date(conversation.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-500">
-                      Level: {conversation.level}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      Language: {conversation.language}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Conversation Preview:</h4>
-                  <p className="text-sm text-gray-600 line-clamp-2">
-                    {conversation.messages[0]?.content || 'No messages in this conversation'}
-                  </p>
-                </div>
-              </div>
-            </Link>
-          ))}
+
+        {/* Right Column */}
+        <div className="space-y-6">
+          {/* 4. Progress Over Time */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
+            <div className="h-64">
+              {/* TODO: Implement line graph */}
+              <p className="text-gray-500 text-center">Line graph showing progress over time</p>
+            </div>
+          </div>
+
+          {/* 5. Language Feature Analysis */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Language Features</h3>
+            <div className="h-64">
+              {/* TODO: Implement heat map */}
+              <p className="text-gray-500 text-center">Heat map of language features</p>
+            </div>
+          </div>
+
+          {/* 6. Context Performance */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-medium mb-4">Context Performance</h3>
+            <div className="space-y-4">
+              {/* TODO: Implement context breakdown */}
+              <p className="text-gray-500 text-center">Performance breakdown by context</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Section */}
+      <div className="mt-6">
+        {/* 7. Correction Patterns */}
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-medium mb-4">Correction Patterns</h3>
+          <div className="space-y-4">
+            {/* TODO: Implement correction patterns */}
+            <p className="text-gray-500 text-center">Most common corrections and patterns</p>
+          </div>
+        </div>
+
+        {/* 8. Learning Progress Indicators */}
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-medium mb-4">Learning Progress</h3>
+          <div className="space-y-4">
+            {/* TODO: Implement progress indicators */}
+            <p className="text-gray-500 text-center">Progress bars and achievement badges</p>
+          </div>
+        </div>
+
+        {/* 9. Personalized Insights */}
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-medium mb-4">Learning Insights</h3>
+          <div className="space-y-4">
+            {/* TODO: Implement AI-generated insights */}
+            <p className="text-gray-500 text-center">AI-generated recommendations and insights</p>
+          </div>
+        </div>
+
+        {/* 10. Comparative Analysis */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium mb-4">Comparative Analysis</h3>
+          <div className="space-y-4">
+            {/* TODO: Implement comparative analysis */}
+            <p className="text-gray-500 text-center">Performance comparison with previous periods and peers</p>
+          </div>
         </div>
       </div>
     </div>
