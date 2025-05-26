@@ -45,7 +45,6 @@ export default function Chat() {
   const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, string>>({});
   const [sessionReady, setSessionReady] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
-  const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [isMicPrompted, setIsMicPrompted] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
@@ -116,15 +115,13 @@ export default function Chat() {
     setSelectedContext(context);
     setSelectedLanguage(language);
     setSelectedLevel(level);
-    setIsSessionLoading(true);
-    setSessionReady(false);
     setConversationStarted(false);
+    setSessionReady(false);
     // Simulate sending session config to backend/OpenAI
     // In real implementation, send session.update and wait for confirmation
     console.log('[Chat] Sending session config to backend/OpenAI:', { context, language, level });
     setTimeout(() => {
       setSessionReady(true);
-      setIsSessionLoading(false);
       console.log('[Chat] Session config confirmed, sessionReady=true');
     }, 1200); // Simulate async session config
   }, [searchParams]);
@@ -212,13 +209,14 @@ export default function Chat() {
 
   // Step 1: User clicks 'Start Conversation'
   const handleStartConversation = async () => {
-    console.log('[Chat] Start Conversation clicked');
-    setIsSessionLoading(true);
-    // Unlock audio playback
-    initAudioContext();
-    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+    // Unlock audio playback on user gesture
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+    }
+    if (audioContextRef.current.state === 'suspended') {
       await audioContextRef.current.resume();
     }
+    console.log('[Chat] AudioContext initialized and resumed');
     setConversationStarted(true);
     // WebSocket/session setup will proceed in useEffect
   };
@@ -251,24 +249,24 @@ export default function Chat() {
           const data = JSON.parse(event.data);
           const now = new Date().toISOString();
           console.warn(`[Chat][${now}] Received event:`, data);
-          if (data.type === 'session.created') {
-            console.warn(`[Chat][${now}] session.created event received:`, JSON.stringify(data));
-            if (data.session && data.session.conversation_id) {
+          if (data.type === 'conversation.created') {
+            if (data.conversation && data.conversation.conversation_id) {
               if (!sessionReady) {
-                setConversationId(data.session.conversation_id);
+                setConversationId(data.conversation.conversation_id);
                 setSessionReady(true);
-                setIsSessionLoading(false);
-                console.log(`[Chat][${now}] Session ready, conversation_id:`, data.session.conversation_id);
+                console.log(`[Chat][${now}] Conversation ready, conversation_id:`, data.conversation.conversation_id);
               } else {
-                console.warn(`[Chat][${now}] Duplicate session.created event received after sessionReady was already set. Data:`, JSON.stringify(data));
+                console.warn(`[Chat][${now}] Duplicate conversation.created event received after sessionReady was already set. Data:`, JSON.stringify(data));
               }
             } else {
-              console.error(`[Chat][${now}] Malformed session.created event (missing conversation_id):`, JSON.stringify(data));
+              console.error(`[Chat][${now}] Malformed conversation.created event (missing conversation_id):`, JSON.stringify(data));
               if (!sessionReady) {
-                setError('Session creation failed');
-                setIsSessionLoading(false);
+                setError('Conversation creation failed');
               }
             }
+          } else if (data.type === 'session.created') {
+            // This is OpenAI's event, just log it
+            console.info(`[Chat][${now}] OpenAI session.created event received (ignored by app):`, JSON.stringify(data));
           }
           if (data.type === 'feedback.generated') {
             const feedback: Feedback = {
@@ -369,7 +367,6 @@ export default function Chat() {
       } catch (error) {
         setError('Failed to connect to server');
         setIsConnected(false);
-        setIsSessionLoading(false);
       }
     })();
     return () => {
@@ -546,19 +543,11 @@ export default function Chat() {
       </div>
     );
   }
-  if (isSessionLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
-        <span className="ml-4 text-orange-600 font-semibold">Setting up your session...</span>
-      </div>
-    );
-  }
   if (!sessionReady) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
-        <span className="ml-4 text-orange-600 font-semibold">Waiting for session confirmation...</span>
+        <span className="ml-4 text-orange-600 font-semibold">Setting up your session...</span>
       </div>
     );
   }

@@ -364,35 +364,37 @@ async def process_feedback_background(message_id: str, language: str, level: str
         except Exception as ws_error:
             logging.error(f"[Background] Error sending feedback error to client: {ws_error}")
 
-async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str, conversation_id: str):
-    """Handle responses from OpenAI and forward to client"""
+async def handle_openai_response_with_callback(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str, on_openai_session_created):
+    """Handle responses from OpenAI, call on_openai_session_created after OpenAI session.created, and forward events to client_ws"""
     handler_id = str(uuid.uuid4())[:8]
-    response_created = False  # Ensure response.create is only sent once
-    
+    response_created = False
+    conversation_id = None
+    openai_session_confirmed = False
+    on_openai_session_created_called = False
     try:
         while True:
             message = await ws.recv()
             if not message:
                 break
-
-            # Parse the message
             data = json.loads(message)
             event_type = data.get('type')
-
-            # Forward the message to the client immediately for audio events
+            # Forward audio events immediately
             if event_type in ['response.audio.delta', 'response.audio.done', 'input_audio_buffer.speech_started']:
                 await client_ws.send_json(data)
                 continue
-
             logging.debug(f"[Handler {handler_id}] Received event: {event_type}")
-
-            # Forward the message to the client
+            # Forward all events to client for debugging (optional)
             await client_ws.send_json(data)
-
-            # Handle specific events
-            if event_type == 'session.created' and not response_created:
-                logging.debug(f"[Handler {handler_id}] Received 'session.created' event. Sending session_config and response.create.")
-                # Send session configuration
+            # Only after OpenAI session.created, create conversation and notify frontend
+            if event_type == 'session.created' and not openai_session_confirmed:
+                openai_session_confirmed = True
+                if not on_openai_session_created_called:
+                    on_openai_session_created_called = True
+                    conversation_id = await on_openai_session_created()
+                    logging.info(f"[Handler {handler_id}] OpenAI session.created confirmed, conversation_id: {conversation_id}")
+                else:
+                    logging.warning(f"[Handler {handler_id}] Duplicate OpenAI session.created event ignored.")
+                # Now send session config and response.create to OpenAI
                 session_config = {
                     "type": "session.update",
                     "session": {
@@ -416,8 +418,6 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                     }
                 }
                 await forward_to_openai(ws, session_config)
-                
-                # Send response.create to initiate conversation
                 response_create = {
                     "type": "response.create",
                     "response": {
@@ -430,12 +430,10 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                 await forward_to_openai(ws, response_create)
                 response_created = True
                 logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
-            
             # Save assistant messages (final transcript)
             elif event_type == 'response.audio_transcript.done' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
-                    # Start saving message in background
                     asyncio.create_task(save_message(conversation_id, 'assistant', transcript))
             # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
@@ -446,21 +444,17 @@ async def handle_openai_response(ws: websockets.WebSocketClientProtocol, client_
                             message_result = await save_message(conversation_id, 'user', transcript)
                             if message_result and message_result.data:
                                 message_id = message_result.data[0]['id']
-                                # Emit event to frontend with the database message id
                                 logging.info(f"[WebSocket] Emitting user message event for message_id={message_id}, transcript={transcript}")
                                 await client_ws.send_json({
                                     "type": "conversation.item.input_audio_transcription.completed",
                                     "message_id": message_id,
                                     "transcript": transcript
                                 })
-                                # Start feedback generation in background
                                 asyncio.create_task(process_feedback_background(message_id, language, level, client_ws))
                                 logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
                         except Exception as e:
                             logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
-                    # Start the background task without awaiting
                     asyncio.create_task(save_and_generate_feedback_and_emit())
-
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
@@ -503,13 +497,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     connection_established = False
     conversation_id = None
     user_id = None
+    
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
             logging.info(f"[WebSocket] New connection: connection_id={connection_id}, user_id={user_id}")
-            logging.debug(f"[Connection {connection_id}] New websocket connection attempt from user {user_id}")
         except Exception as e:
             logging.debug(f"[Connection {connection_id}] Authentication failed: {str(e)}")
             await websocket.close(code=4001, reason="Invalid authentication token")
@@ -527,31 +521,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             context = initial_data.get('context', 'restaurant')
             language = initial_data.get('language', 'en')
             logging.debug(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}")
-            
-            # Create a new conversation
-            conversation_id = await create_conversation(user_id, context, language, level)
-            logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
-            
-            # Send session.created with conversation_id
-            session_created = {
-                "type": "session.created",
-                "session": {
-                    "conversation_id": conversation_id,
-                    "level": level,
-                    "context": context,
-                    "language": language
-                }
-            }
-            logging.debug(f"[Connection {connection_id}] About to send session.created with conversation_id: {conversation_id}")
-            logging.debug(f"[Connection {connection_id}] session_created message: {session_created}")
-            await websocket.send_json(session_created)
-            
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
             level = 'A1'
             context = 'restaurant'
             language = 'en'
-        
+            
         # Connect to OpenAI
         openai_ws = await connect_to_openai()
         if not openai_ws:
@@ -561,44 +536,42 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
             return
             
-        logging.debug(f"[Connection {connection_id}] Successfully connected to OpenAI, creating handler")
-        # Start handling OpenAI responses in a separate task, pass conversation_id
-        openai_handler = asyncio.create_task(handle_openai_response(openai_ws, websocket, level, context, language, conversation_id))
+        logging.debug(f"[Connection {connection_id}] Successfully connected to OpenAI")
         
+        # Create callback for when OpenAI session is created
+        async def on_openai_session_created():
+            nonlocal conversation_id
+            conversation_id = await create_conversation(user_id, context, language, level)
+            logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
+            
+            # Send conversation.created to frontend
+            await websocket.send_json({
+                "type": "conversation.created",
+                "conversation": {
+                    "conversation_id": conversation_id,
+                    "level": level,
+                    "context": context,
+                    "language": language
+                }
+            })
+            return conversation_id
+        
+        # Start handling OpenAI responses
+        openai_handler = asyncio.create_task(
+            handle_openai_response_with_callback(
+                openai_ws, websocket, level, context, language, on_openai_session_created
+            )
+        )
+        
+        # Main client message loop - only handle client->OpenAI messages
         try:
             while True:
-                # Receive message from client
                 data = await websocket.receive_json()
                 data_type = data.get('type')
-                logging.debug(f"[websocket_endpoint] ***MESSAGE RECEIVED***: {data_type}, conversation_id: {conversation_id}")
-
+                
+                # Only forward audio input to OpenAI, everything else is handled by the response handler
                 if data_type == 'input_audio_buffer.append':
                     await forward_to_openai(openai_ws, data)
-                elif data_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
-                    transcript = data.get('transcript', '')
-                    if transcript:
-                        async def save_and_generate_feedback_and_emit():
-                            try:
-                                message_result = await save_message(conversation_id, 'user', transcript)
-                                if message_result and message_result.data:
-                                    message_id = message_result.data[0]['id']
-                                    # Emit event to frontend with the database message id
-                                    logging.info(f"[WebSocket] Emitting user message event for message_id={message_id}, transcript={transcript}")
-                                    await websocket.send_json({
-                                        "type": "conversation.item.input_audio_transcription.completed",
-                                        "message_id": message_id,
-                                        "transcript": transcript
-                                    })
-                                    # Start feedback generation in background
-                                    asyncio.create_task(process_feedback_background(message_id, language, level, websocket))
-                                    logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
-                            except Exception as e:
-                                logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
-                        # Start the background task without awaiting
-                        asyncio.create_task(save_and_generate_feedback_and_emit())
-                elif data_type == 'user_message' and conversation_id:
-                    # Start saving message in background
-                    asyncio.create_task(save_message(conversation_id, 'user', data.get('content', '')))
                     
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error in websocket connection: {e}")
@@ -615,7 +588,6 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 logging.debug(f"[Connection {connection_id}] Closing websocket connection")
                 await websocket.close()
             except RuntimeError:
-                # Ignore "Cannot call send once a close message has been sent" error
                 pass
 
 # Add new endpoint to get conversation history
