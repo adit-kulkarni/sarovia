@@ -16,10 +16,10 @@ const Navigation = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navigationItems = [
-    { name: 'Chat', href: '/chat', icon: HomeIcon },
+    { name: 'Dashboard', href: '/', icon: HomeIcon },
     { name: 'History', href: '/history', icon: ClockIcon },
-    { name: 'Progress', href: '/progress', icon: ChartBarIcon },
-    { name: 'Curriculum', href: '/curriculum', icon: BookOpenIcon },
+    // { name: 'Progress', href: '/progress', icon: ChartBarIcon },
+    // { name: 'Curriculum', href: '/curriculum', icon: BookOpenIcon },
     { name: 'Profile', href: '/profile', icon: UserIcon },
   ];
 

@@ -1,1 +1,3 @@
-aiohttp==3.9.3 
+aiohttp==3.9.3
+python-dotenv==1.0.0
+supabase==2.3.0 

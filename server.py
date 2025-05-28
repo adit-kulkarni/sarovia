@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, Query, Body
+from fastapi import FastAPI, WebSocket, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
@@ -619,7 +619,7 @@ async def get_conversation_messages(conversation_id: str, token: str = Query(...
             raise Exception("Conversation not found or access denied")
         
         # Get all messages for the conversation
-        result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', 'asc').execute()
+        result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', desc=False).execute()
         
         return result.data
     except Exception as e:
@@ -796,6 +796,149 @@ async def get_feedback(
     except Exception as e:
         logging.error(f"Error getting feedback: {e}")
         raise
+
+class CurriculumCreateRequest(BaseModel):
+    language: str
+    start_level: str
+
+class CurriculumUpdateRequest(BaseModel):
+    language: Optional[str] = None
+    start_level: Optional[str] = None
+    current_lesson: Optional[int] = None
+
+class LessonCreateRequest(BaseModel):
+    order: int
+    brief: str
+
+class LessonUpdateRequest(BaseModel):
+    order: Optional[int] = None
+    brief: Optional[str] = None
+    status: Optional[str] = None
+    score: Optional[float] = None
+
+@app.get("/api/curriculums")
+async def list_curriculums(token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    result = supabase.table('curriculums').select('*').eq('user_id', user_id).execute()
+    return result.data
+
+@app.post("/api/curriculums")
+async def create_curriculum(request: CurriculumCreateRequest, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    data = {
+        'user_id': user_id,
+        'language': request.language,
+        'start_level': request.start_level
+    }
+    result = supabase.table('curriculums').insert(data).execute()
+    return result.data
+
+@app.get("/api/curriculums/{curriculum_id}")
+async def get_curriculum(curriculum_id: str, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    result = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    return result.data[0]
+
+@app.put("/api/curriculums/{curriculum_id}")
+async def update_curriculum(curriculum_id: str, request: CurriculumUpdateRequest, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    update_data = {k: v for k, v in request.dict().items() if v is not None}
+    result = supabase.table('curriculums').update(update_data).eq('id', curriculum_id).eq('user_id', user_id).execute()
+    return result.data
+
+@app.delete("/api/curriculums/{curriculum_id}")
+async def delete_curriculum(curriculum_id: str, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    result = supabase.table('curriculums').delete().eq('id', curriculum_id).eq('user_id', user_id).execute()
+    return {"deleted": True}
+
+@app.get("/api/curriculums/{curriculum_id}/lessons")
+async def list_lessons(curriculum_id: str, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    # Verify curriculum ownership
+    curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+    if not curriculum.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    result = supabase.table('lessons').select('*').eq('curriculum_id', curriculum_id).order('order', desc=False).execute()
+    return result.data
+
+@app.post("/api/curriculums/{curriculum_id}/lessons")
+async def create_lesson(curriculum_id: str, request: LessonCreateRequest, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    # Verify curriculum ownership
+    curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+    if not curriculum.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    data = {
+        'curriculum_id': curriculum_id,
+        'order': request.order,
+        'brief': request.brief
+    }
+    result = supabase.table('lessons').insert(data).execute()
+    return result.data
+
+@app.get("/api/lessons/{lesson_id}")
+async def get_lesson(lesson_id: str, token: str = Query(...)):
+    # Get lesson and verify curriculum ownership
+    lesson = supabase.table('lessons').select('*').eq('id', lesson_id).execute()
+    if not lesson.data:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    curriculum_id = lesson.data[0]['curriculum_id']
+    curriculum = supabase.table('curriculums').select('id', 'user_id').eq('id', curriculum_id).execute()
+    if not curriculum.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    if curriculum.data[0]['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return lesson.data[0]
+
+@app.put("/api/lessons/{lesson_id}")
+async def update_lesson(lesson_id: str, request: LessonUpdateRequest, token: str = Query(...)):
+    lesson = supabase.table('lessons').select('*').eq('id', lesson_id).execute()
+    if not lesson.data:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    curriculum_id = lesson.data[0]['curriculum_id']
+    curriculum = supabase.table('curriculums').select('id', 'user_id').eq('id', curriculum_id).execute()
+    if not curriculum.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    if curriculum.data[0]['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    update_data = {k: v for k, v in request.dict().items() if v is not None}
+    result = supabase.table('lessons').update(update_data).eq('id', lesson_id).execute()
+    return result.data
+
+@app.delete("/api/lessons/{lesson_id}")
+async def delete_lesson(lesson_id: str, token: str = Query(...)):
+    lesson = supabase.table('lessons').select('*').eq('id', lesson_id).execute()
+    if not lesson.data:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    curriculum_id = lesson.data[0]['curriculum_id']
+    curriculum = supabase.table('curriculums').select('id', 'user_id').eq('id', curriculum_id).execute()
+    if not curriculum.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    if curriculum.data[0]['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    supabase.table('lessons').delete().eq('id', lesson_id).execute()
+    return {"deleted": True}
+
+@app.get("/api/lesson_templates")
+async def list_lesson_templates(language: str):
+    result = supabase.table('lesson_templates').select('*').eq('language', language).order('order_num', desc=False).execute()
+    return result.data
 
 if __name__ == "__main__":
     import uvicorn
