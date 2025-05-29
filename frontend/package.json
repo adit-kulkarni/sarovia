@@ -8,6 +8,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@fontsource/fredoka": "^5.2.7",
+    "@fontsource/press-start-2p": "^5.2.5",
+    "@headlessui/react": "^2.2.4",
     "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.49.4",
     "chart.js": "^4.4.9",

@@ -13,11 +13,13 @@ html, body {
   @apply font-sans;
   color: rgb(var(--foreground-rgb));
   background: rgb(var(--background-rgb));
+  font-family: 'Nunito Sans', sans-serif;
 }
 
 /* Custom scrollbar styles */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -25,15 +27,35 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #888;
+  background: #bbb;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: #ff9800;
 }
 
 /* Optionally, apply Nunito Sans to all elements for extra consistency */
 * {
   font-family: inherit;
+}
+
+/* Retro header font for section headers */
+.retro-header {
+  font-family: 'Press Start 2P', monospace !important;
+  color: #ff9800;
+  text-shadow: 1px 1px 0 #FFF8E1, 2px 2px 0 #ffb74d;
+}
+
+/* Vibrating doodle effect for button SVG outline */
+.animate-doodle-vibrate {
+  animation: doodle-vibrate 0.18s infinite linear alternate;
+}
+@keyframes doodle-vibrate {
+  0% { transform: translateY(-1px) translateX(0px) scale(1.01); }
+  20% { transform: translateY(1px) translateX(-1px) scale(0.99); }
+  40% { transform: translateY(-2px) translateX(1px) scale(1.01); }
+  60% { transform: translateY(1px) translateX(2px) scale(0.98); }
+  80% { transform: translateY(-1px) translateX(-2px) scale(1.01); }
+  100% { transform: translateY(1px) translateX(1px) scale(1); }
 } 

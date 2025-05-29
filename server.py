@@ -460,15 +460,18 @@ async def handle_openai_response_with_callback(ws: websockets.WebSocketClientPro
     finally:
         await ws.close()
 
-async def create_conversation(user_id: str, context: str, language: str, level: str) -> str:
+async def create_conversation(user_id: str, context: str, language: str, level: str, curriculum_id: str) -> str:
     """Create a new conversation and return its ID"""
     try:
-        logging.debug(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}")
+        if not curriculum_id:
+            raise ValueError("curriculum_id is required to create a conversation")
+        logging.debug(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}, curriculum_id={curriculum_id}")
         result = supabase.table('conversations').insert({
             'user_id': user_id,
             'context': context,
             'language': language,
-            'level': level
+            'level': level,
+            'curriculum_id': curriculum_id
         }).execute()
         logging.debug(f"[create_conversation] Supabase insert result.data: {result.data}")
         return result.data[0]['id']
@@ -514,19 +517,21 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
         connection_established = True
         logging.debug(f"[Connection {connection_id}] Websocket connection established")
         
-        # Get the level, context, and language from the client's initial message
+        # Get the level, context, language, and curriculum_id from the client's initial message
         try:
             initial_data = await websocket.receive_json()
             level = initial_data.get('level', 'A1')
             context = initial_data.get('context', 'restaurant')
             language = initial_data.get('language', 'en')
-            logging.debug(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}")
+            curriculum_id = initial_data.get('curriculum_id')
+            if not curriculum_id:
+                raise ValueError("curriculum_id is required to start a conversation")
+            logging.debug(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}, curriculum_id={curriculum_id}")
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
-            level = 'A1'
-            context = 'restaurant'
-            language = 'en'
-            
+            await websocket.close(code=4002, reason="Missing or invalid initial data (curriculum_id required)")
+            return
+        
         # Connect to OpenAI
         openai_ws = await connect_to_openai()
         if not openai_ws:
@@ -541,7 +546,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
         # Create callback for when OpenAI session is created
         async def on_openai_session_created():
             nonlocal conversation_id
-            conversation_id = await create_conversation(user_id, context, language, level)
+            conversation_id = await create_conversation(user_id, context, language, level, curriculum_id)
             logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
             
             # Send conversation.created to frontend
@@ -551,7 +556,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                     "conversation_id": conversation_id,
                     "level": level,
                     "context": context,
-                    "language": language
+                    "language": language,
+                    "curriculum_id": curriculum_id
                 }
             })
             return conversation_id

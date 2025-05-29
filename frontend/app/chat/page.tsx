@@ -304,13 +304,15 @@ export default function Chat() {
           setIsConnected(true);
           setError(null);
           // Send initial config (init message)
+          const curriculumId = searchParams.get('curriculum_id');
           ws?.send(JSON.stringify({
             type: 'init',
             language: selectedLanguage,
             level: selectedLevel,
-            context: selectedContext
+            context: selectedContext,
+            curriculum_id: curriculumId
           }));
-          console.log('[Chat] Sent init message:', { language: selectedLanguage, level: selectedLevel, context: selectedContext });
+          console.log('[Chat] Sent init message:', { language: selectedLanguage, level: selectedLevel, context: selectedContext, curriculum_id: curriculumId });
         };
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
