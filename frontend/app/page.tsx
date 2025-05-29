@@ -353,7 +353,7 @@ const Dashboard = () => {
       </div>
       {/* Floating Add Button */}
       <div className="mb-12">
-        <h2 className="retro-header text-4xl font-extrabold text-center mb-4">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
           Language Paths
         </h2>
         <div className="flex items-center mb-2 px-10 gap-2">
@@ -392,47 +392,6 @@ const Dashboard = () => {
                 <div className="text-sm text-gray-700 mb-1">Start Level: <span className="font-semibold">{c.start_level}</span></div>
                 <div className="text-sm text-gray-700 mb-1">Start Date: <span className="font-semibold">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
                 <div className="text-sm text-gray-700">Current Level: <span className="font-semibold">(coming soon)</span></div>
-                {/* Delete confirmation popup */}
-                {showDeleteId === c.id && (
-                  <div className="absolute top-8 left-1/2 -translate-x-1/2 z-20 bg-white border border-red-400 rounded-xl shadow-lg p-5 w-72 flex flex-col items-center">
-                    <div className="text-red-600 font-semibold mb-2">Delete this curriculum?</div>
-                    <div className="text-sm text-gray-700 mb-2 text-center">This action <b>cannot be undone</b> and will remove all progress and lessons for this language path.</div>
-                    <label className="flex items-center mb-3 text-xs text-gray-600">
-                      <input type="checkbox" className="mr-2" checked={deleteConfirmChecked} onChange={e => setDeleteConfirmChecked(e.target.checked)} />
-                      I understand this cannot be undone
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        className="px-3 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
-                        onClick={e => { e.stopPropagation(); setShowDeleteId(null); }}
-                        disabled={deleting}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-                        disabled={!deleteConfirmChecked || deleting}
-                        onClick={async e => {
-                          e.stopPropagation();
-                          setDeleting(true);
-                          setError(null);
-                          try {
-                            const res = await fetch(`${API_BASE}/api/curriculums/${c.id}?token=${token}`, { method: 'DELETE' });
-                            if (!res.ok) throw new Error('Failed to delete curriculum');
-                            setShowDeleteId(null);
-                            await fetchCurriculums();
-                          } catch (e) {
-                            setError(e instanceof Error ? e.message : String(e));
-                          } finally {
-                            setDeleting(false);
-                          }
-                        }}
-                      >
-                        Delete
-              </button>
-                    </div>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -441,7 +400,7 @@ const Dashboard = () => {
 
       {/* Curriculum Path Tiles (for selected curriculum) */}
       <div className="mb-12">
-        <h2 className="retro-header text-4xl font-extrabold text-center mb-6">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-6">
           Curriculum
         </h2>
         <div className="px-10">
@@ -487,7 +446,7 @@ const Dashboard = () => {
       {/* User Progress Analytics */}
       {selectedCurriculum && (
         <div className="mb-8">
-          <h2 className="retro-header text-4xl font-extrabold text-center mb-4">
+          <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
             Your Progress
           </h2>
           {feedbackLoading ? (
@@ -713,6 +672,82 @@ const Dashboard = () => {
                       disabled={contextLoading}
                     >
                       Cancel
+                    </button>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
+
+      {/* Delete Curriculum Modal */}
+      <Transition.Root show={!!showDeleteId} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setShowDeleteId(null)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300" enterFrom="opacity-0" enterTo="opacity-100"
+            leave="ease-in duration-200" leaveFrom="opacity-100" leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black bg-opacity-30 transition-opacity" />
+          </Transition.Child>
+          <div className="fixed inset-0 z-50 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4 text-center">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100"
+                leave="ease-in duration-200" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95"
+              >
+                <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-8 text-left align-middle shadow-xl transition-all">
+                  <Dialog.Title as="h3" className="text-2xl font-bold mb-4 text-red-600 text-center">
+                    Delete this curriculum?
+                  </Dialog.Title>
+                  {(() => {
+                    const c = curriculums.find(cur => cur.id === showDeleteId);
+                    if (!c) return null;
+                    return (
+                      <div className="mb-4 text-center">
+                        <div className="text-lg font-semibold mb-1 flex items-center justify-center gap-2">
+                          {languages.find(l => l.code === c.language)?.flag}
+                          {languages.find(l => l.code === c.language)?.name || c.language}
+                        </div>
+                        <div className="text-sm text-gray-700 mb-1">Start Level: <span className="font-semibold">{c.start_level}</span></div>
+                        <div className="text-sm text-gray-700 mb-1">Start Date: <span className="font-semibold">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
+                      </div>
+                    );
+                  })()}
+                  <div className="text-sm text-gray-700 mb-2 text-center">This action <b>cannot be undone</b> and will remove all progress and lessons for this language path.</div>
+                  <label className="flex items-center mb-3 text-xs text-gray-600 justify-center">
+                    <input type="checkbox" className="mr-2" checked={deleteConfirmChecked} onChange={e => setDeleteConfirmChecked(e.target.checked)} />
+                    I understand this cannot be undone
+                  </label>
+                  <div className="flex gap-2 justify-center">
+                    <button
+                      className="px-3 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+                      onClick={() => setShowDeleteId(null)}
+                      disabled={deleting}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                      disabled={!deleteConfirmChecked || deleting}
+                      onClick={async () => {
+                        setDeleting(true);
+                        setError(null);
+                        try {
+                          const res = await fetch(`${API_BASE}/api/curriculums/${showDeleteId}?token=${token}`, { method: 'DELETE' });
+                          if (!res.ok) throw new Error('Failed to delete curriculum');
+                          setShowDeleteId(null);
+                          await fetchCurriculums();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setDeleting(false);
+                        }
+                      }}
+                    >
+                      Delete
                     </button>
                   </div>
                 </Dialog.Panel>
