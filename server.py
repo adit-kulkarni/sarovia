@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, Query, Body, HTTPException
+from fastapi import FastAPI, WebSocket, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
@@ -945,6 +945,83 @@ async def delete_lesson(lesson_id: str, token: str = Query(...)):
 async def list_lesson_templates(language: str):
     result = supabase.table('lesson_templates').select('*').eq('language', language).order('order_num', desc=False).execute()
     return result.data
+
+@app.get("/api/user_knowledge")
+async def get_user_knowledge(language: str, token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    result = supabase.table('user_knowledge').select('knowledge_json').eq('user_id', user_id).eq('language', language).execute()
+    if not result.data:
+        return {"knowledge": None}
+    return {"knowledge": result.data[0]['knowledge_json']}
+
+@app.post("/api/user_knowledge")
+async def generate_user_knowledge(request: Request, language: str = Query(...), token: str = Query(...)):
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    # Check if already exists
+    existing = supabase.table('user_knowledge').select('id').eq('user_id', user_id).eq('language', language).execute()
+    if existing.data:
+        return {"error": "Knowledge report already exists. Delete it first if you want to regenerate."}
+    # Fetch all user messages for this language
+    conversations = supabase.table('conversations').select('id').eq('user_id', user_id).eq('language', language).execute()
+    conversation_ids = [c['id'] for c in conversations.data]
+    messages = []
+    for cid in conversation_ids:
+        res = supabase.table('messages').select('content', 'role').eq('conversation_id', cid).eq('role', 'user').order('created_at', desc=False).execute()
+        messages.extend([m['content'] for m in res.data if m['role'] == 'user'])
+    if not messages:
+        return {"error": "No user messages found for this language."}
+    # Build prompt
+    transcript = "\n".join(messages)
+    prompt = f"""
+You are a language learning assistant. Analyze the following transcript of a user's {language} messages. For each part of speech, provide a list of unique words the user has used:\n- nouns\n- pronouns\n- adjectives\n- verbs (for each verb, list the lemma, and for each lemma, all tenses and persons used)\n- adverbs\n- prepositions\n- conjunctions\n- articles\n- interjections\n\nOutput ONLY a valid JSON object with this structure, and nothing else (no markdown, no explanation, no code block):\n{{\n  \"nouns\": [\"...\"],\n  \"pronouns\": [\"...\"],\n  \"adjectives\": [\"...\"],\n  \"verbs\": {{\n    \"lemma\": {{\n      \"tense\": [\"person1\", \"person2\", ...],\n      ...\n    }},\n    ...\n  }},\n  \"adverbs\": [\"...\"],\n  \"prepositions\": [\"...\"],\n  \"conjunctions\": [\"...\"],\n  \"articles\": [\"...\"],\n  \"interjections\": [\"...\"]\n}}\n\nHere is the transcript:\n{transcript}\n"""
+    # Call OpenAI API (sync for now)
+    import aiohttp
+    import re
+    async def analyze_with_openai(prompt):
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "gpt-4-turbo-preview",
+            "messages": [{"role": "system", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 1500
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                data = await response.json()
+                return data["choices"][0]["message"]["content"]
+    def extract_json_from_response(text):
+        text = text.strip()
+        if text.startswith('```'):
+            text = re.sub(r'^```[a-zA-Z]*', '', text)
+            text = text.strip('`\n')
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            json_str = match.group(0)
+            try:
+                return json.loads(json_str)
+            except Exception:
+                pass
+        try:
+            return json.loads(text)
+        except Exception:
+            return None
+    result = await analyze_with_openai(prompt)
+    parsed = extract_json_from_response(result)
+    if parsed is None:
+        return {"error": "Failed to parse LLM output as JSON.", "raw": result}
+    # Store in DB
+    supabase.table('user_knowledge').insert({
+        'user_id': user_id,
+        'language': language,
+        'knowledge_json': parsed
+    }).execute()
+    return {"knowledge": parsed}
 
 if __name__ == "__main__":
     import uvicorn

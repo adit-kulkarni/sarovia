@@ -1,0 +1,382 @@
+{
+  "nouns": [
+    "people",
+    "day",
+    "friends",
+    "table",
+    "cup",
+    "tea",
+    "brand",
+    "bro",
+    "Yorkshire",
+    "specials",
+    "food",
+    "window",
+    "eggs",
+    "coffee",
+    "pictures",
+    "milk",
+    "sugar",
+    "mom",
+    "history",
+    "look",
+    "olive",
+    "oil",
+    "spreads",
+    "bottle",
+    "thanks",
+    "singing",
+    "menu",
+    "lobster",
+    "peace",
+    "Covent",
+    "Garden",
+    "kids",
+    "markets",
+    "mountains",
+    "photographing",
+    "London",
+    "park",
+    "apple",
+    "fruits",
+    "peaches",
+    "hands",
+    "breakfast",
+    "type",
+    "example",
+    "espressos",
+    "songs",
+    "song",
+    "line",
+    "part",
+    "Caroline",
+    "sound",
+    "Drake",
+    "heartline",
+    "bling",
+    "thing",
+    "heli",
+    "olivine",
+    "parks",
+    "party",
+    "camera",
+    "computer",
+    "time",
+    "Father",
+    "Son",
+    "Holy",
+    "Spirit",
+    "Amen",
+    "guys",
+    "baby"
+  ],
+  "pronouns": [
+    "me",
+    "I",
+    "that",
+    "your",
+    "you",
+    "it",
+    "he",
+    "his",
+    "we",
+    "us",
+    "my",
+    "yourself",
+    "they",
+    "who"
+  ],
+  "adjectives": [
+    "hot",
+    "good",
+    "sad",
+    "great",
+    "nasty",
+    "tasty",
+    "hungry",
+    "pretty",
+    "dope",
+    "little",
+    "English",
+    "other",
+    "favourite",
+    "first",
+    "ready",
+    "both"
+  ],
+  "verbs": {
+    "have": {
+      "Present": [
+        "I",
+        "you"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "please": {
+      "Present": [
+        "I"
+      ]
+    },
+    "thank": {
+      "Present": [
+        "I"
+      ]
+    },
+    "be": {
+      "Present": [
+        "I",
+        "you",
+        "it"
+      ],
+      "Past": [
+        "I",
+        "it"
+      ]
+    },
+    "do": {
+      "Present": [
+        "I",
+        "you"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "love": {
+      "Present": [
+        "I",
+        "you"
+      ]
+    },
+    "prefer": {
+      "Present": [
+        "I"
+      ]
+    },
+    "need": {
+      "Present": [
+        "I"
+      ]
+    },
+    "tell": {
+      "Present": [
+        "you",
+        "I"
+      ]
+    },
+    "sound": {
+      "Present": [
+        "I",
+        "it"
+      ],
+      "Past": [
+        "it"
+      ]
+    },
+    "go": {
+      "Present": [
+        "I"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "think": {
+      "Present": [
+        "I"
+      ]
+    },
+    "like": {
+      "Present": [
+        "I",
+        "you"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "meet": {
+      "Past": [
+        "I"
+      ]
+    },
+    "take": {
+      "Present": [
+        "I"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "buy": {
+      "Present": [
+        "I"
+      ]
+    },
+    "coming": {
+      "Present": [
+        "I"
+      ]
+    },
+    "try": {
+      "Present": [
+        "I",
+        "you"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "see": {
+      "Present": [
+        "you"
+      ]
+    },
+    "explore": {
+      "Present": [
+        "I"
+      ]
+    },
+    "will": {
+      "Future": [
+        "I"
+      ]
+    },
+    "eat": {
+      "Present": [
+        "I"
+      ],
+      "Past": [
+        "I"
+      ]
+    },
+    "enjoy": {
+      "Present": [
+        "I"
+      ]
+    },
+    "drink": {
+      "Present": [
+        "I"
+      ]
+    },
+    "know": {
+      "Present": [
+        "you",
+        "I"
+      ]
+    },
+    "sing": {
+      "Present": [
+        "we",
+        "I",
+        "you"
+      ]
+    },
+    "recommend": {
+      "Present": [
+        "you",
+        "I"
+      ]
+    },
+    "start": {
+      "Present": [
+        "you",
+        "us"
+      ]
+    },
+    "skip": {
+      "Present": [
+        "we"
+      ]
+    },
+    "mean": {
+      "Present": [
+        "I"
+      ]
+    },
+    "speak": {
+      "Present": [
+        "we"
+      ]
+    },
+    "could": {
+      "Past": [
+        "I"
+      ]
+    },
+    "look": {
+      "Present": [
+        "I"
+      ]
+    },
+    "work": {
+      "Present": [
+        "I"
+      ]
+    },
+    "knit": {
+      "Present": [
+        "you"
+      ]
+    },
+    "encourage": {
+      "Present": [
+        "I"
+      ]
+    }
+  },
+  "adverbs": [
+    "really",
+    "also",
+    "never",
+    "maybe",
+    "here",
+    "more",
+    "before",
+    "quite",
+    "usually",
+    "together",
+    "straight",
+    "so",
+    "only",
+    "not"
+  ],
+  "prepositions": [
+    "for",
+    "on",
+    "by",
+    "with",
+    "about",
+    "of",
+    "to",
+    "in",
+    "at",
+    "like",
+    "from"
+  ],
+  "conjunctions": [
+    "and",
+    "but",
+    "or",
+    "if",
+    "unless"
+  ],
+  "articles": [
+    "a",
+    "the",
+    "an"
+  ],
+  "interjections": [
+    "hi",
+    "bye",
+    "yeah",
+    "hey",
+    "oh",
+    "nah",
+    "ok",
+    "nope"
+  ]
+}

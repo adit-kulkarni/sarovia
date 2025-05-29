@@ -1,0 +1,542 @@
+{
+  "nouns": [
+    "apple",
+    "ass",
+    "baby",
+    "bit",
+    "bottle",
+    "brand",
+    "breakfast",
+    "bro",
+    "camera",
+    "caroline",
+    "coffee",
+    "computer",
+    "cup",
+    "day",
+    "dope",
+    "drink",
+    "eating",
+    "egg",
+    "espressos",
+    "example",
+    "eye",
+    "food",
+    "friend",
+    "fruit",
+    "fuck",
+    "fun",
+    "garden",
+    "guy",
+    "hand",
+    "heartline",
+    "heli",
+    "hell",
+    "history",
+    "kid",
+    "king",
+    "line",
+    "lobster",
+    "look",
+    "market",
+    "menu",
+    "milk",
+    "mom",
+    "mountain",
+    "name",
+    "oil",
+    "oiling",
+    "olive",
+    "olivine",
+    "one",
+    "park",
+    "part",
+    "party",
+    "peace",
+    "peach",
+    "people",
+    "photo",
+    "photography",
+    "picture",
+    "please",
+    "singing",
+    "sky",
+    "song",
+    "sound",
+    "special",
+    "spread",
+    "sugar",
+    "table",
+    "tea",
+    "thank",
+    "thing",
+    "time",
+    "today",
+    "type",
+    "window",
+    "your"
+  ],
+  "pronouns": [
+    "both",
+    "he",
+    "his",
+    "i",
+    "it",
+    "my",
+    "some",
+    "something",
+    "that",
+    "there",
+    "this",
+    "us",
+    "we",
+    "what",
+    "which",
+    "who",
+    "you",
+    "your"
+  ],
+  "adjectives": [
+    "bueno",
+    "english",
+    "favorite",
+    "favourite",
+    "first",
+    "good",
+    "great",
+    "high",
+    "hot",
+    "hungry",
+    "kind",
+    "little",
+    "main",
+    "more",
+    "much",
+    "nasty",
+    "new",
+    "next",
+    "nice",
+    "olive",
+    "other",
+    "pretty",
+    "ready",
+    "ridiculous",
+    "sad",
+    "sound",
+    "sure",
+    "tasty"
+  ],
+  "verbs": [
+    "appreciate",
+    "be",
+    "ble",
+    "bueno",
+    "buy",
+    "cause",
+    "come",
+    "do",
+    "drink",
+    "eat",
+    "encourage",
+    "enjoy",
+    "explore",
+    "get",
+    "go",
+    "have",
+    "knit",
+    "know",
+    "let",
+    "like",
+    "look",
+    "love",
+    "mean",
+    "meet",
+    "need",
+    "photograph",
+    "please",
+    "prefer",
+    "recommend",
+    "see",
+    "seize",
+    "shut",
+    "sing",
+    "singe",
+    "skip",
+    "song",
+    "sound",
+    "speak",
+    "start",
+    "take",
+    "tell",
+    "thank",
+    "think",
+    "try",
+    "want",
+    "work"
+  ],
+  "adverbs": [
+    "actually",
+    "also",
+    "around",
+    "before",
+    "certainly",
+    "else",
+    "here",
+    "just",
+    "maybe",
+    "more",
+    "much",
+    "never",
+    "no",
+    "now",
+    "only",
+    "quite",
+    "really",
+    "so",
+    "straight",
+    "that",
+    "though",
+    "together",
+    "too",
+    "usually",
+    "very"
+  ],
+  "prepositions": [
+    "about",
+    "above",
+    "by",
+    "for",
+    "in",
+    "like",
+    "of",
+    "off",
+    "on",
+    "out",
+    "to",
+    "up",
+    "with"
+  ],
+  "conjunctions": [
+    "and",
+    "but"
+  ],
+  "articles": [
+    "a",
+    "an",
+    "another",
+    "any",
+    "no",
+    "some",
+    "that",
+    "the",
+    "this",
+    "what",
+    "which"
+  ],
+  "interjections": [
+    "amen",
+    "hello",
+    "hey",
+    "hi",
+    "no",
+    "nope",
+    "oh",
+    "ok",
+    "please",
+    "yeah",
+    "yes"
+  ],
+  "verb_usage": {
+    "thank": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "have": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "appreciate": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "please": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "need": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "love": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "prefer": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "tell": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "get": {
+      "Past": [
+        "Unknown"
+      ]
+    },
+    "sound": {
+      "Pres": [
+        "3"
+      ]
+    },
+    "go": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "like": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Pres": [
+        "3",
+        "Unknown"
+      ],
+      "Past": [
+        "Unknown"
+      ]
+    },
+    "want": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "take": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Past": [
+        "Unknown"
+      ],
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "shut": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "think": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "let": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "meet": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "buy": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "come": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "seize": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "photograph": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "singe": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "explore": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "eat": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "enjoy": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Past": [
+        "Unknown"
+      ]
+    },
+    "do": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "drink": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "try": {
+      "Past": [
+        "Unknown"
+      ],
+      "Pres": [
+        "3"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "see": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "song": {
+      "Past": [
+        "Unknown"
+      ]
+    },
+    "know": {
+      "Pres": [
+        "Unknown"
+      ],
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "sing": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "recommend": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "start": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "skip": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "cause": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "ble": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "mean": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Past": [
+        "Unknown"
+      ]
+    },
+    "speak": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "look": {
+      "Pres": [
+        "3"
+      ]
+    },
+    "bueno": {
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "work": {
+      "Unknown": [
+        "Unknown"
+      ],
+      "Pres": [
+        "Unknown"
+      ]
+    },
+    "be": {
+      "Pres": [
+        "3"
+      ]
+    },
+    "encourage": {
+      "Unknown": [
+        "Unknown"
+      ]
+    },
+    "knit": {
+      "Past": [
+        "Unknown"
+      ]
+    }
+  }
+}

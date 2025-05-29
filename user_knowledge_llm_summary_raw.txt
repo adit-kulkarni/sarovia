@@ -1,0 +1,277 @@
+```json
+{
+  "nouns": [
+    "people",
+    "day",
+    "friends",
+    "table",
+    "cup",
+    "tea",
+    "brand",
+    "bro",
+    "Yorkshire",
+    "specials",
+    "food",
+    "eggs",
+    "window",
+    "history",
+    "Tower",
+    "olive",
+    "oil",
+    "spreads",
+    "bottle",
+    "singing",
+    "menu",
+    "lobster",
+    "Peace",
+    "Covent",
+    "Garden",
+    "kids",
+    "markets",
+    "mountains",
+    "photographing",
+    "London",
+    "park",
+    "apple",
+    "fruits",
+    "peaches",
+    "hands",
+    "coffee",
+    "breakfast",
+    "type",
+    "earl",
+    "grey",
+    "espressos",
+    "songs",
+    "song",
+    "Twinkle",
+    "Star",
+    "sky",
+    "Caroline",
+    "sound",
+    "Drake",
+    "heartline",
+    "bling",
+    "heli",
+    "olivine",
+    "King",
+    "parks",
+    "party",
+    "camera",
+    "computer",
+    "Father",
+    "Son",
+    "Holy",
+    "Spirit",
+    "Amen",
+    "guys"
+  ],
+  "pronouns": [
+    "I",
+    "me",
+    "your",
+    "you",
+    "he",
+    "his",
+    "we",
+    "us",
+    "my"
+  ],
+  "adjectives": [
+    "hot",
+    "good",
+    "sad",
+    "great",
+    "nasty",
+    "tasty",
+    "hungry",
+    "ridiculous",
+    "little",
+    "first",
+    "ready",
+    "both"
+  ],
+  "verbs": {
+    "have": {
+      "Present": ["I", "you"],
+      "Past": ["I"]
+    },
+    "please": {
+      "Present": ["I"]
+    },
+    "thank": {
+      "Present": ["I"]
+    },
+    "be": {
+      "Present": ["I", "you", "it"],
+      "Past": ["I"]
+    },
+    "appreciate": {
+      "Present": ["I"]
+    },
+    "need": {
+      "Present": ["I"]
+    },
+    "do": {
+      "Present": ["I", "you"],
+      "Past": ["I"]
+    },
+    "love": {
+      "Present": ["I", "you"]
+    },
+    "prefer": {
+      "Present": ["I"]
+    },
+    "tell": {
+      "Present": ["you", "I"],
+      "Past": ["I"]
+    },
+    "sound": {
+      "Present": ["I", "it"]
+    },
+    "go": {
+      "Present": ["I"]
+    },
+    "think": {
+      "Present": ["I"]
+    },
+    "have": {
+      "Present": ["I", "you"],
+      "Past": ["I"]
+    },
+    "like": {
+      "Present": ["I", "you"],
+      "Past": ["I"]
+    },
+    "meet": {
+      "Present": ["I"]
+    },
+    "take": {
+      "Present": ["I"],
+      "Past": ["I"]
+    },
+    "buy": {
+      "Present": ["I"]
+    },
+    "come": {
+      "Present": ["I"],
+      "Past": ["I"]
+    },
+    "try": {
+      "Present": ["I", "you"],
+      "Past": ["I"]
+    },
+    "want": {
+      "Present": ["I"]
+    },
+    "explore": {
+      "Present": ["I"]
+    },
+    "will": {
+      "Future": ["I"]
+    },
+    "go": {
+      "Present": ["I"],
+      "Past": ["I"]
+    },
+    "eat": {
+      "Present": ["I"]
+    },
+    "enjoy": {
+      "Present": ["I"]
+    },
+    "drink": {
+      "Present": ["I"]
+    },
+    "see": {
+      "Present": ["I", "you"]
+    },
+    "sing": {
+      "Present": ["we", "you", "I"]
+    },
+    "recommend": {
+      "Present": ["you", "I"]
+    },
+    "start": {
+      "Present": ["you", "I"]
+    },
+    "know": {
+      "Present": ["you", "I"]
+    },
+    "skip": {
+      "Present": ["I"]
+    },
+    "mean": {
+      "Present": ["I"]
+    },
+    "speak": {
+      "Present": ["we"]
+    },
+    "eat": {
+      "Present": ["I"]
+    },
+    "look": {
+      "Present": ["I"]
+    },
+    "work": {
+      "Present": ["I"]
+    },
+    "think": {
+      "Present": ["I"]
+    },
+    "encourage": {
+      "Present": ["I"]
+    }
+  },
+  "adverbs": [
+    "really",
+    "never",
+    "maybe",
+    "here",
+    "more",
+    "quite",
+    "usually",
+    "never",
+    "together",
+    "straight",
+    "so",
+    "only",
+    "now",
+    "not"
+  ],
+  "prepositions": [
+    "for",
+    "on",
+    "by",
+    "with",
+    "about",
+    "of",
+    "to",
+    "in",
+    "at",
+    "before",
+    "on"
+  ],
+  "conjunctions": [
+    "and",
+    "but",
+    "if",
+    "unless"
+  ],
+  "articles": [
+    "a",
+    "the"
+  ],
+  "interjections": [
+    "please",
+    "bye",
+    "hi",
+    "yeah",
+    "hey",
+    "no",
+    "oh",
+    "nah",
+    "ok"
+  ]
+}
+```

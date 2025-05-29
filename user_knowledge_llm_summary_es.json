@@ -1,0 +1,262 @@
+{
+  "nouns": [
+    "mesa",
+    "v\u00eddeo",
+    "video",
+    "carta",
+    "recomendaci\u00f3n",
+    "pescado",
+    "fotograf\u00eda",
+    "Fujifilm",
+    "c\u00e1mara",
+    "meses",
+    "saludo",
+    "monta\u00f1as",
+    "playas",
+    "fotos",
+    "plan",
+    "c\u00e1mara",
+    "Badalona",
+    "2MARS",
+    "Londres",
+    "Manchester",
+    "university",
+    "Birmingham",
+    "a\u00f1os",
+    "chica",
+    "Estados",
+    "Unidos",
+    "parques",
+    "paisajes",
+    "playa",
+    "lugar",
+    "momento",
+    "Playa",
+    "Blanca",
+    "primavera",
+    "visita",
+    "personas",
+    "especialidades",
+    "d\u00eda",
+    "orden",
+    "vinos",
+    "vino",
+    "tinto",
+    "minutos",
+    "ingl\u00e9s",
+    "caf\u00e9",
+    "leche"
+  ],
+  "pronouns": [
+    "nos",
+    "yo",
+    "me",
+    "ella",
+    "ti",
+    "t\u00fa"
+  ],
+  "adjectives": [
+    "pr\u00f3ximo",
+    "mucho",
+    "bien",
+    "hermosas",
+    "buen",
+    "mejor",
+    "todo",
+    "ingl\u00e9s"
+  ],
+  "verbs": {
+    "ver": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "vemos": {
+      "Presente": [
+        "nosotros"
+      ]
+    },
+    "necesitar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "poder": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "gustar": {
+      "Presente": [
+        "yo",
+        "me"
+      ]
+    },
+    "llamar": {
+      "Presente": [
+        "me"
+      ]
+    },
+    "usar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "estar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "viajar": {
+      "Gerundio": [
+        "yo"
+      ]
+    },
+    "dar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "tomar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "ir": {
+      "Futuro": [
+        "yo"
+      ]
+    },
+    "hacer": {
+      "Futuro": [
+        "yo"
+      ]
+    },
+    "nacer": {
+      "Pret\u00e9rito": [
+        "yo"
+      ]
+    },
+    "crecer": {
+      "Pret\u00e9rito": [
+        "yo"
+      ]
+    },
+    "trabajar": {
+      "Pret\u00e9rito": [
+        "yo"
+      ]
+    },
+    "practicar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "hablar": {
+      "Presente": [
+        "yo",
+        "ella"
+      ]
+    },
+    "conocer": {
+      "Presente": [
+        "yo"
+      ],
+      "Pret\u00e9rito": [
+        "yo"
+      ]
+    },
+    "preferir": {
+      "Pret\u00e9rito": [
+        "yo"
+      ]
+    },
+    "acompa\u00f1ar": {
+      "Infinitivo": [
+        "yo"
+      ]
+    },
+    "transcribir": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "pasar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "saber": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "querer": {
+      "Presente": [
+        "nosotros",
+        "yo"
+      ]
+    },
+    "escuchar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "tener": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "explicar": {
+      "Presente": [
+        "yo"
+      ]
+    },
+    "probar": {
+      "Presente": [
+        "nosotros"
+      ]
+    },
+    "significar": {
+      "Presente": [
+        "yo"
+      ]
+    }
+  },
+  "adverbs": [
+    "ahora",
+    "entonces",
+    "m\u00e1s",
+    "mucho",
+    "bien"
+  ],
+  "prepositions": [
+    "para",
+    "en",
+    "a",
+    "por",
+    "con"
+  ],
+  "conjunctions": [
+    "y",
+    "pero",
+    "porque"
+  ],
+  "articles": [
+    "una",
+    "el",
+    "las",
+    "los",
+    "la",
+    "un"
+  ],
+  "interjections": [
+    "\u00a1Gracias!",
+    "Mmmmmm",
+    "Yoooooo",
+    "WTF?",
+    "Ayyyy",
+    "\u00a1Hola!",
+    "S\u00ed"
+  ]
+}

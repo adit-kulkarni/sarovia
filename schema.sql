@@ -53,4 +53,14 @@ create policy "Users can insert messages to their conversations"
             where conversations.id = messages.conversation_id
             and conversations.user_id = auth.uid()
         )
-    ); 
+    );
+
+CREATE TABLE IF NOT EXISTS user_knowledge (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL,
+    language text NOT NULL,
+    knowledge_json jsonb NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    UNIQUE (user_id, language)
+); 

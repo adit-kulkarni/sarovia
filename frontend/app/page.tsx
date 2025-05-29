@@ -17,6 +17,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Dialog, Transition } from '@headlessui/react';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
 import '@fontsource/press-start-2p';
+import YourKnowledgePanel from './components/YourKnowledgePanel';
 
 interface LanguageCard {
   code: string;
@@ -457,6 +458,10 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Left Column */}
               <div className="space-y-6">
+                {/* Your Knowledge Panel as first analytics card */}
+                <div className="bg-white rounded-lg shadow p-6">
+                  <YourKnowledgePanel language={selectedCurriculum.language} level={selectedCurriculum.start_level} />
+                </div>
                 {/* 1. Mistake Categories Chart */}
                 <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
                   <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
