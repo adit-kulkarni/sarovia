@@ -260,8 +260,21 @@ const Dashboard = () => {
     router.push('/curriculum'); // Go to curriculum creation page
   };
 
-  const handleStartLesson = (lessonId: string) => {
-    router.push(`/curriculum/lesson/${lessonId}`);
+  const handleStartLesson = async (lessonId: string) => {
+    if (!selectedCurriculum) return;
+    console.log('handleStartLesson', { lessonId, selectedCurriculum }); // Debug log
+    try {
+      const res = await fetch(`${API_BASE}/api/start_lesson_conversation?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lesson_template_id: String(lessonId), curriculum_id: selectedCurriculum.id })
+      });
+      if (!res.ok) throw new Error('Failed to start lesson conversation');
+      const data = await res.json();
+      router.push(`/chat?conversation=${data.conversation_id}&curriculum_id=${selectedCurriculum.id}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const handleStartConversation = () => {

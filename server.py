@@ -16,6 +16,7 @@ import uuid
 from pydantic import BaseModel
 from typing import List, Optional
 import aiohttp
+from fastapi.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -364,8 +365,7 @@ async def process_feedback_background(message_id: str, language: str, level: str
         except Exception as ws_error:
             logging.error(f"[Background] Error sending feedback error to client: {ws_error}")
 
-async def handle_openai_response_with_callback(ws: websockets.WebSocketClientProtocol, client_ws: WebSocket, level: str, context: str, language: str, on_openai_session_created):
-    """Handle responses from OpenAI, call on_openai_session_created after OpenAI session.created, and forward events to client_ws"""
+async def handle_openai_response_with_callback(ws, client_ws, level, context, language, on_openai_session_created, custom_instructions=None):
     handler_id = str(uuid.uuid4())[:8]
     response_created = False
     conversation_id = None
@@ -382,7 +382,6 @@ async def handle_openai_response_with_callback(ws: websockets.WebSocketClientPro
             if event_type in ['response.audio.delta', 'response.audio.done', 'input_audio_buffer.speech_started']:
                 await client_ws.send_json(data)
                 continue
-            logging.debug(f"[Handler {handler_id}] Received event: {event_type}")
             # Forward all events to client for debugging (optional)
             await client_ws.send_json(data)
             # Only after OpenAI session.created, create conversation and notify frontend
@@ -395,10 +394,12 @@ async def handle_openai_response_with_callback(ws: websockets.WebSocketClientPro
                 else:
                     logging.warning(f"[Handler {handler_id}] Duplicate OpenAI session.created event ignored.")
                 # Now send session config and response.create to OpenAI
+                instructions_to_send = custom_instructions if custom_instructions else get_level_specific_instructions(level, context, language)
+                logging.info(f"[Handler {handler_id}] Sending session.update with instructions:\n{instructions_to_send}")
                 session_config = {
                     "type": "session.update",
                     "session": {
-                        "instructions": get_level_specific_instructions(level, context, language),
+                        "instructions": instructions_to_send,
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.5,
@@ -500,38 +501,71 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     connection_established = False
     conversation_id = None
     user_id = None
-    
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
-            logging.info(f"[WebSocket] New connection: connection_id={connection_id}, user_id={user_id}")
+            logging.info(f"[WebSocket] Connection open: connection_id={connection_id}, user_id={user_id}")
         except Exception as e:
             logging.debug(f"[Connection {connection_id}] Authentication failed: {str(e)}")
             await websocket.close(code=4001, reason="Invalid authentication token")
             return
-            
         # Accept the connection
         await websocket.accept()
         connection_established = True
-        logging.debug(f"[Connection {connection_id}] Websocket connection established")
-        
-        # Get the level, context, language, and curriculum_id from the client's initial message
+        # Get the initial message
         try:
             initial_data = await websocket.receive_json()
-            level = initial_data.get('level', 'A1')
-            context = initial_data.get('context', 'restaurant')
-            language = initial_data.get('language', 'en')
-            curriculum_id = initial_data.get('curriculum_id')
-            if not curriculum_id:
-                raise ValueError("curriculum_id is required to start a conversation")
-            logging.debug(f"[Connection {connection_id}] Received initial data: level={level}, context={context}, language={language}, curriculum_id={curriculum_id}")
+            conversation_id = initial_data.get('conversation_id') or initial_data.get('conversation')
+            custom_instructions = initial_data.get('custom_instructions')
+            # If conversation_id is provided, fetch conversation and lesson info
+            if conversation_id:
+                convo_result = supabase.table('conversations').select('*').eq('id', conversation_id).eq('user_id', user_id).execute()
+                if not convo_result.data:
+                    raise ValueError("Conversation not found or not owned by user")
+                conversation = convo_result.data[0]
+                language = conversation.get('language', 'en')
+                level = conversation.get('level', 'A1')
+                context = conversation.get('context', 'restaurant')
+                curriculum_id = conversation.get('curriculum_id')
+                lesson_id = conversation.get('lesson_id')
+                # If lesson_id is present, fetch lesson template and build custom instructions
+                if lesson_id:
+                    lesson_result = supabase.table('lesson_templates').select('*').eq('id', lesson_id).execute()
+                    if not lesson_result.data:
+                        raise ValueError("Lesson template not found for conversation")
+                    lesson = lesson_result.data[0]
+                    level = lesson.get('difficulty', level)
+                    context = f"Lesson: {lesson.get('title', '')}"
+                    order_num = lesson.get('order_num', 0)
+                    # Compose custom instructions
+                    base_instructions = f"""
+You are a {language} teacher. 
+The lesson briefing is defined below. 
+Speak in the language CEFR level defined by \"difficulty\". Your sentence length should also be suggested by the CEFR level in \"difficulty\". For example, A1 should be short, succinct messages. If needed, you can speak English to help the student. Try to keep the conversation flowing. If you cannot, you can always suggest practicing the same thing over and over again.
+"""
+                    if order_num <= 10:
+                        base_instructions += " You should ALWAYS provide an English translation after each sentence to help the user."
+                    base_instructions += "\n\nThe conversation body is determined by \"Objectives\" below. You can take inspiration from Content, cultural element, and practice activity. Do not stray from this brief. Speak ONLY in present tense, even if the user asks about the past or future.\n\n"
+                    base_instructions += f"### Lesson: {lesson.get('title', '')}\n**Difficulty**: {lesson.get('difficulty', '')}  \n**Objectives**: {lesson.get('objectives', '')}  \n**Content**: {lesson.get('content', '')}  \n**Cultural Element**: {lesson.get('cultural_element', '')}  \n**Practice Activity**: {lesson.get('practice_activity', '')}\n"
+                    custom_instructions = base_instructions
+                logging.info(f"[Connection {connection_id}] Loaded conversation_id={conversation_id}, context={context}, curriculum_id={curriculum_id}, level={level}, language={language}, lesson_id={lesson_id}, custom_instructions={'yes' if custom_instructions else 'no'}")
+                if not curriculum_id:
+                    raise ValueError("curriculum_id is required for conversation")
+            else:
+                # Fallback: use provided fields (for generic conversations)
+                level = initial_data.get('level', 'A1')
+                context = initial_data.get('context', 'restaurant')
+                language = initial_data.get('language', 'en')
+                curriculum_id = initial_data.get('curriculum_id')
+                logging.info(f"[Connection {connection_id}] Received initial data: context={context}, curriculum_id={curriculum_id}, level={level}, language={language}, custom_instructions={'yes' if custom_instructions else 'no'}")
+                if not curriculum_id:
+                    raise ValueError("curriculum_id is required to start a conversation")
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error receiving initial data: {e}")
             await websocket.close(code=4002, reason="Missing or invalid initial data (curriculum_id required)")
             return
-        
         # Connect to OpenAI
         openai_ws = await connect_to_openai()
         if not openai_ws:
@@ -540,58 +574,50 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 await websocket.send_json({"error": "Failed to connect to OpenAI service"})
                 await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
             return
-            
-        logging.debug(f"[Connection {connection_id}] Successfully connected to OpenAI")
-        
         # Create callback for when OpenAI session is created
         async def on_openai_session_created():
             nonlocal conversation_id
-            conversation_id = await create_conversation(user_id, context, language, level, curriculum_id)
-            logging.debug(f"[Connection {connection_id}] Created new conversation: {conversation_id}")
-            
-            # Send conversation.created to frontend
+            if conversation_id:
+                # Already created, just return
+                return conversation_id
+            conversation_id_new = await create_conversation(user_id, context, language, level, curriculum_id)
+            logging.info(f"[Connection {connection_id}] Created new conversation: {conversation_id_new}")
             await websocket.send_json({
                 "type": "conversation.created",
                 "conversation": {
-                    "conversation_id": conversation_id,
+                    "conversation_id": conversation_id_new,
                     "level": level,
                     "context": context,
                     "language": language,
                     "curriculum_id": curriculum_id
                 }
             })
-            return conversation_id
-        
+            return conversation_id_new
         # Start handling OpenAI responses
         openai_handler = asyncio.create_task(
             handle_openai_response_with_callback(
-                openai_ws, websocket, level, context, language, on_openai_session_created
+                openai_ws, websocket, level, context, language, on_openai_session_created, custom_instructions
             )
         )
-        
         # Main client message loop - only handle client->OpenAI messages
         try:
             while True:
                 data = await websocket.receive_json()
                 data_type = data.get('type')
-                
                 # Only forward audio input to OpenAI, everything else is handled by the response handler
                 if data_type == 'input_audio_buffer.append':
                     await forward_to_openai(openai_ws, data)
-                    
         except Exception as e:
             logging.error(f"[Connection {connection_id}] Error in websocket connection: {e}")
         finally:
-            logging.debug(f"[Connection {connection_id}] Cleaning up handler and closing OpenAI connection")
             openai_handler.cancel()
             await openai_ws.close()
-            
     except Exception as e:
         logging.error(f"[Connection {connection_id}] Unexpected error: {e}")
     finally:
         if connection_established:
             try:
-                logging.debug(f"[Connection {connection_id}] Closing websocket connection")
+                logging.info(f"[WebSocket] Connection closed: connection_id={connection_id}")
                 await websocket.close()
             except RuntimeError:
                 pass
@@ -1022,6 +1048,102 @@ You are a language learning assistant. Analyze the following transcript of a use
         'knowledge_json': parsed
     }).execute()
     return {"knowledge": parsed}
+
+class StartLessonConversationRequest(BaseModel):
+    lesson_template_id: str
+    curriculum_id: str
+
+class StartLessonConversationResponse(BaseModel):
+    conversation_id: str
+    level: str
+    language: str
+    custom_instructions: str
+    lesson_order: int
+
+@app.post("/api/start_lesson_conversation", response_model=StartLessonConversationResponse)
+async def start_lesson_conversation(
+    request: StartLessonConversationRequest,
+    token: str = Query(...)
+):
+    """Start a conversation for a lesson with custom instructions."""
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    # Fetch lesson template
+    lesson_result = supabase.table('lesson_templates').select('*').eq('id', request.lesson_template_id).execute()
+    if not lesson_result.data:
+        raise HTTPException(status_code=404, detail="Lesson template not found")
+    lesson = lesson_result.data[0]
+    # Fetch curriculum to verify ownership and get language/level
+    curriculum_result = supabase.table('curriculums').select('*').eq('id', request.curriculum_id).eq('user_id', user_id).execute()
+    if not curriculum_result.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found or not owned by user")
+    curriculum = curriculum_result.data[0]
+    language = curriculum['language']
+    level = lesson.get('difficulty', curriculum.get('start_level', 'A1'))
+    order_num = lesson.get('order_num', 0)
+    # Compose custom instructions
+    base_instructions = f"""
+You are a {language} teacher. 
+The lesson briefing is defined below. 
+Speak in the language CEFR level defined by \"difficulty\". Your sentence length should also be suggested by the CEFR level in \"difficulty\". For example, A1 should be short, succinct messages. If needed, you can speak English to help the student. Try to keep the conversation flowing. If you cannot, you can always suggest practicing the same thing over and over again.
+"""
+    # Only provide English translation for first 10 lessons
+    if order_num <= 10:
+        base_instructions += " You should ALWAYS provide an English translation after each sentence to help the user."
+    base_instructions += "\n\nThe conversation body is determined by \"Objectives\" below. You can take inspiration from Content, cultural element, and practice activity. Do not stray from this brief. Speak ONLY in present tense, even if the user asks about the past or future.\n\n"
+    base_instructions += f"### Lesson: {lesson.get('title', '')}\n**Difficulty**: {lesson.get('difficulty', '')}  \n**Objectives**: {lesson.get('objectives', '')}  \n**Content**: {lesson.get('content', '')}  \n**Cultural Element**: {lesson.get('cultural_element', '')}  \n**Practice Activity**: {lesson.get('practice_activity', '')}\n"
+    # Create conversation with lesson_id and context as 'Lesson: <Title>'
+    conversation_result = supabase.table('conversations').insert({
+        'user_id': user_id,
+        'context': f"Lesson: {lesson.get('title', '')}",
+        'language': language,
+        'level': level,
+        'curriculum_id': request.curriculum_id,
+        'lesson_id': lesson['id']
+    }).execute()
+    conversation_id = conversation_result.data[0]['id']
+    return StartLessonConversationResponse(
+        conversation_id=conversation_id,
+        level=level,
+        language=language,
+        custom_instructions=base_instructions,
+        lesson_order=order_num
+    )
+
+@app.get("/api/conversation_instructions")
+async def get_conversation_instructions(conversation_id: str, token: str = Query(...)):
+    """Return the custom instructions for a conversation, if any."""
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    # Fetch conversation and verify ownership
+    convo = supabase.table('conversations').select('*').eq('id', conversation_id).eq('user_id', user_id).execute()
+    if not convo.data:
+        raise HTTPException(status_code=404, detail="Conversation not found or not owned by user")
+    conversation = convo.data[0]
+    # If context is lesson:<lesson_id>, fetch lesson template and generate instructions
+    context = conversation.get('context', '')
+    if context.startswith('lesson:'):
+        lesson_id = context.split(':', 1)[1]
+        lesson_result = supabase.table('lesson_templates').select('*').eq('id', lesson_id).execute()
+        if not lesson_result.data:
+            raise HTTPException(status_code=404, detail="Lesson template not found")
+        lesson = lesson_result.data[0]
+        language = conversation['language']
+        level = lesson.get('difficulty', conversation.get('level', 'A1'))
+        order_num = lesson.get('order_num', 0)
+        base_instructions = f"""
+You are a {language} teacher. 
+The lesson briefing is defined below. 
+Speak in the language CEFR level defined by \"difficulty\". Your sentence length should also be suggested by the CEFR level in \"difficulty\". For example, A1 should be short, succinct messages. If needed, you can speak English to help the student. Try to keep the conversation flowing. If you cannot, you can always suggest practicing the same thing over and over again.
+"""
+        if order_num <= 10:
+            base_instructions += " You should ALWAYS provide an English translation after each sentence to help the user."
+        base_instructions += "\n\nThe conversation body is determined by \"Objectives\" below. You can take inspiration from Content, cultural element, and practice activity. Do not stray from this brief. Speak ONLY in present tense, even if the user asks about the past or future.\n\n"
+        base_instructions += f"### Lesson: {lesson.get('title', '')}\n**Difficulty**: {lesson.get('difficulty', '')}  \n**Objectives**: {lesson.get('objectives', '')}  \n**Content**: {lesson.get('content', '')}  \n**Cultural Element**: {lesson.get('cultural_element', '')}  \n**Practice Activity**: {lesson.get('practice_activity', '')}\n"
+        return JSONResponse({"instructions": base_instructions})
+    # Otherwise, return default instructions
+    instructions = get_level_specific_instructions(conversation['level'], conversation['context'], conversation['language'])
+    return JSONResponse({"instructions": instructions})
 
 if __name__ == "__main__":
     import uvicorn

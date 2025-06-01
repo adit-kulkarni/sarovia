@@ -28,6 +28,8 @@ const languageNames: { [key: string]: string } = {
   kn: 'Kannada'
 };
 
+const API_BASE = 'http://localhost:8000';
+
 export default function Chat() {
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -46,6 +48,7 @@ export default function Chat() {
   const [sessionReady, setSessionReady] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [isMicPrompted, setIsMicPrompted] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState<string | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -104,6 +107,23 @@ export default function Chat() {
           setConversationId(conversationId);
           setConversationStarted(true);
           setSessionReady(true);
+
+          // Fetch conversation context from Supabase
+          const { data: convoData, error: convoError } = await supabase
+            .from('conversations')
+            .select('context, language, level')
+            .eq('id', conversationId)
+            .single();
+          if (convoError) throw convoError;
+          if (convoData && convoData.context) {
+            setSelectedContext(convoData.context);
+          }
+          if (convoData && convoData.language) {
+            setSelectedLanguage(convoData.language);
+          }
+          if (convoData && convoData.level) {
+            setSelectedLevel(convoData.level);
+          }
 
           // Fetch messages for this conversation
           const { data: messagesData, error: messagesError } = await supabase
@@ -173,6 +193,26 @@ export default function Chat() {
 
     initializeChat();
   }, [router, searchParams]);
+
+  useEffect(() => {
+    const fetchInstructions = async () => {
+      const conversationId = searchParams.get('conversation');
+      if (!conversationId) return;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const token = session.access_token;
+      try {
+        const res = await fetch(`${API_BASE}/api/conversation_instructions?conversation_id=${conversationId}&token=${token}`);
+        if (res.ok) {
+          const data = await res.json();
+          setCustomInstructions(data.instructions);
+        }
+      } catch (e) {
+        // Ignore, fallback to default
+      }
+    };
+    fetchInstructions();
+  }, [searchParams]);
 
   useEffect(() => {
     // Parse context, language, level from query params
@@ -305,14 +345,25 @@ export default function Chat() {
           setError(null);
           // Send initial config (init message)
           const curriculumId = searchParams.get('curriculum_id');
-          ws?.send(JSON.stringify({
-            type: 'init',
-            language: selectedLanguage,
-            level: selectedLevel,
-            context: selectedContext,
-            curriculum_id: curriculumId
-          }));
-          console.log('[Chat] Sent init message:', { language: selectedLanguage, level: selectedLevel, context: selectedContext, curriculum_id: curriculumId });
+          const conversationId = searchParams.get('conversation');
+          let initMsg: any;
+          if (conversationId) {
+            initMsg = {
+              type: 'init',
+              conversation_id: conversationId,
+              curriculum_id: curriculumId
+            };
+          } else {
+            initMsg = {
+              type: 'init',
+              language: selectedLanguage,
+              level: selectedLevel,
+              context: selectedContext,
+              curriculum_id: curriculumId
+            };
+          }
+          ws?.send(JSON.stringify(initMsg));
+          console.log('[Chat] Sent init message:', initMsg);
         };
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
@@ -640,7 +691,11 @@ export default function Chat() {
             </div>
             <div className="flex flex-col items-start">
               <span className="text-xs text-gray-500 uppercase tracking-wide">Context</span>
-              <span className="font-semibold text-base text-gray-800">{contextTitles[selectedContext]}</span>
+              <span className="font-semibold text-base text-gray-800">
+                {selectedContext.startsWith('Lesson:')
+                  ? selectedContext.replace('Lesson:', '').trim()
+                  : contextTitles[selectedContext] || selectedContext}
+              </span>
             </div>
             <div className="flex flex-col items-start">
               <span className="text-xs text-gray-500 uppercase tracking-wide">Level</span>
