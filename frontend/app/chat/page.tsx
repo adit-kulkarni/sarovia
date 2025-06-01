@@ -105,7 +105,6 @@ export default function Chat() {
         // If we have a conversation ID, load the existing conversation
         if (conversationId) {
           setConversationId(conversationId);
-          setConversationStarted(true);
           setSessionReady(true);
 
           // Fetch conversation context from Supabase
@@ -652,7 +651,7 @@ export default function Chat() {
       <div className="flex flex-col items-center justify-center min-h-screen">
         <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center">
           <h2 className="text-2xl font-bold mb-2">Ready to begin?</h2>
-          <p className="mb-4 text-gray-700">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{contextTitles[selectedContext]}</b>.</p>
+          <p className="mb-4 text-gray-700">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{selectedContext.startsWith('Lesson:') ? selectedContext.replace('Lesson:', '').trim() : contextTitles[selectedContext] || selectedContext}</b>.</p>
           <button
             onClick={handleStartConversation}
             className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
