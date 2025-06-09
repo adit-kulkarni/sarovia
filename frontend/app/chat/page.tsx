@@ -8,6 +8,7 @@ import { Feedback, LessonProgress, LessonProgressEvent } from '../types/feedback
 import FeedbackPanel from '../components/FeedbackPanel';
 import ChatBubble from '../components/ChatBubble';
 import LessonProgressIndicator from '../components/LessonProgressIndicator';
+import LessonSummaryModal from '../components/LessonSummaryModal';
 import type { Message } from '../types/feedback';
 
 const contextTitles: { [key: string]: string } = {
@@ -54,6 +55,11 @@ function ChatComponent() {
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
   const [isLessonConversation, setIsLessonConversation] = useState(false);
   
+  // Lesson Summary Modal States
+  const [showLessonSummary, setShowLessonSummary] = useState(false);
+  const [lessonSummaryData, setLessonSummaryData] = useState<any>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -761,6 +767,7 @@ function ChatComponent() {
     }
 
     setIsCompletingLesson(true);
+    setLoadingSummary(true);
     
     try {
       // Stop recording if currently recording
@@ -787,6 +794,7 @@ function ChatComponent() {
         throw new Error('No active session');
       }
 
+      // First, complete the lesson
       const response = await fetch(`${API_BASE}/api/lesson_progress/complete?token=${session.access_token}`, {
         method: 'POST',
         headers: {
@@ -805,12 +813,32 @@ function ChatComponent() {
 
       console.log('[Complete Lesson] Lesson completed successfully:', responseData);
       
-      // Redirect back to curriculum or lesson list
-      const curriculumId = searchParams.get('curriculum_id');
-      if (curriculumId) {
-        router.push(`/?curriculum_id=${curriculumId}`);
+      // Add debugging for the summary call
+      console.log('[Complete Lesson] Progress ID:', lessonProgress.progress_id);
+      console.log('[Complete Lesson] Session token length:', session.access_token.length);
+      
+      // Now fetch the lesson summary with proper URL encoding
+      const encodedProgressId = encodeURIComponent(lessonProgress.progress_id);
+      const encodedToken = encodeURIComponent(session.access_token);
+      const summaryUrl = `${API_BASE}/api/lesson_progress/${encodedProgressId}/summary?token=${encodedToken}`;
+      console.log('[Complete Lesson] Summary URL:', summaryUrl);
+      
+      const summaryResponse = await fetch(summaryUrl);
+      
+      if (summaryResponse.ok) {
+        const summaryData = await summaryResponse.json();
+        console.log('[Complete Lesson] Fetched summary:', summaryData);
+        setLessonSummaryData(summaryData);
+        setShowLessonSummary(true);
       } else {
-        router.push('/');
+        console.error('[Complete Lesson] Failed to fetch summary');
+        // Fallback: redirect immediately if summary fails
+        const curriculumId = searchParams.get('curriculum_id');
+        if (curriculumId) {
+          router.push(`/?curriculum_id=${curriculumId}`);
+        } else {
+          router.push('/');
+        }
       }
       
     } catch (error) {
@@ -818,6 +846,16 @@ function ChatComponent() {
       setError(error instanceof Error ? error.message : 'Failed to complete lesson');
     } finally {
       setIsCompletingLesson(false);
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleReturnToDashboard = () => {
+    const curriculumId = searchParams.get('curriculum_id');
+    if (curriculumId) {
+      router.push(`/?curriculum_id=${curriculumId}`);
+    } else {
+      router.push('/');
     }
   };
 
@@ -1045,6 +1083,15 @@ function ChatComponent() {
           {error}
         </div>
       )}
+      
+      {/* Lesson Summary Modal */}
+      <LessonSummaryModal
+        isOpen={showLessonSummary}
+        onClose={() => setShowLessonSummary(false)}
+        onReturnToDashboard={handleReturnToDashboard}
+        summaryData={lessonSummaryData}
+        loading={loadingSummary}
+      />
     </div>
   );
 }

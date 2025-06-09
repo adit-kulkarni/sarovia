@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import aiohttp
 from fastapi.responses import JSONResponse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -617,6 +617,7 @@ async def get_or_create_lesson_progress(conversation_id: str, user_id: str) -> d
         progress_data = {
             'user_id': user_id,
             'curriculum_id': curriculum_id,
+            'conversation_id': conversation_id,  # Add the conversation_id
             'status': 'in_progress',
             'required_turns': required_turns,
             'started_at': datetime.now().isoformat()
@@ -2603,6 +2604,350 @@ async def get_custom_lesson_progress(
         raise HTTPException(status_code=500, detail=str(e))
 
 # Incremental User Knowledge Analysis Functions
+@app.get("/api/lesson_progress/{progress_id}/summary")
+async def get_lesson_summary(progress_id: str, token: str = Query(...)):
+    """Get lesson completion summary with achievements and feedback analysis"""
+    try:
+        # Handle JWT verification separately to return proper 401 errors
+        try:
+            user_payload = verify_jwt(token)
+            user_id = user_payload["sub"]
+        except jwt.InvalidTokenError as e:
+            logging.warning(f"[Lesson Summary] Invalid JWT token: {e}")
+            raise HTTPException(status_code=401, detail="Invalid authentication token")
+        except Exception as e:
+            logging.warning(f"[Lesson Summary] JWT verification failed: {e}")
+            raise HTTPException(status_code=401, detail="Authentication failed")
+        
+        logging.info(f"[Lesson Summary] Fetching summary for progress_id: {progress_id}, user_id: {user_id}")
+        
+        # Get progress record
+        progress = supabase.table('lesson_progress').select('*').eq('id', progress_id).eq('user_id', user_id).execute()
+        
+        if not progress.data:
+            logging.error(f"[Lesson Summary] Progress record not found for id: {progress_id}")
+            raise HTTPException(status_code=404, detail="Progress record not found")
+        
+        progress_data = progress.data[0]
+        logging.info(f"[Lesson Summary] Found progress data: {progress_data}")
+        
+        # Get conversation for this lesson
+        conversation_id = progress_data.get('conversation_id')
+        if not conversation_id:
+            # Fallback: try to find conversation by user_id and lesson info
+            logging.warning(f"[Lesson Summary] No conversation_id in progress data, attempting fallback search")
+            conversation_query = supabase.table('conversations').select('id, created_at').eq('user_id', user_id)
+            
+            if progress_data.get('lesson_id'):
+                conversation_query = conversation_query.eq('lesson_id', progress_data['lesson_id'])
+            elif progress_data.get('custom_lesson_id'):
+                conversation_query = conversation_query.eq('custom_lesson_id', progress_data['custom_lesson_id'])
+            else:
+                logging.error(f"[Lesson Summary] No lesson_id or custom_lesson_id in progress data")
+                raise HTTPException(status_code=404, detail="No conversation found for this lesson")
+            
+            conversations = conversation_query.order('created_at', desc=True).limit(1).execute()
+            if not conversations.data:
+                logging.error(f"[Lesson Summary] No conversation found for lesson")
+                raise HTTPException(status_code=404, detail="No conversation found for this lesson")
+            
+            conversation_data = conversations.data[0]
+            conversation_id = conversation_data['id']
+            
+            # Update the progress record with the found conversation_id for future use
+            supabase.table('lesson_progress').update({
+                'conversation_id': conversation_id,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', progress_id).execute()
+            
+            logging.info(f"[Lesson Summary] Found conversation via fallback: {conversation_id}")
+        else:
+            conversation = supabase.table('conversations').select('id, created_at').eq('id', conversation_id).execute()
+            if not conversation.data:
+                logging.error(f"[Lesson Summary] Conversation not found for id: {conversation_id}")
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            
+            conversation_data = conversation.data[0]
+            
+        logging.info(f"[Lesson Summary] Found conversation data: {conversation_data}")
+        
+        # Get lesson details
+        lesson_title = "Practice Session"
+        if progress_data.get('lesson_id'):
+            lesson_template = supabase.table('lesson_templates').select('title').eq('id', progress_data['lesson_id']).execute()
+            if lesson_template.data:
+                lesson_title = lesson_template.data[0]['title']
+        elif progress_data.get('custom_lesson_id'):
+            custom_lesson = supabase.table('custom_lessons').select('title').eq('id', progress_data['custom_lesson_id']).execute()
+            if custom_lesson.data:
+                lesson_title = custom_lesson.data[0]['title']
+        
+        # Get messages from this conversation
+        messages = supabase.table('messages').select('*').eq('conversation_id', conversation_data['id']).order('created_at', desc=False).execute()
+        user_messages = [m for m in messages.data if m['role'] == 'user']
+        logging.info(f"[Lesson Summary] Found {len(user_messages)} user messages")
+        
+        # Get feedback for this conversation by joining through messages
+        # First get all message IDs from this conversation
+        message_ids = [m['id'] for m in messages.data]
+        
+        if message_ids:
+            feedback_data = supabase.table('message_feedback').select('*').in_('message_id', message_ids).execute()
+        else:
+            feedback_data = type('obj', (object,), {'data': []})()  # Empty result
+        
+        logging.info(f"[Lesson Summary] Found {len(feedback_data.data)} feedback records")
+        
+        # Analyze feedback patterns
+        mistake_categories = {}
+        total_mistakes = 0
+        
+        for feedback in feedback_data.data:
+            mistakes = feedback.get('mistakes', [])
+            for mistake in mistakes:
+                category = mistake.get('category', 'other')
+                severity = mistake.get('severity', 'minor')
+                
+                if category not in mistake_categories:
+                    mistake_categories[category] = {
+                        'category': category,
+                        'count': 0,
+                        'severity': severity,
+                        'examples': []
+                    }
+                
+                mistake_categories[category]['count'] += 1
+                mistake_categories[category]['examples'].append({
+                    'error': mistake.get('error', ''),
+                    'correction': mistake.get('correction', ''),
+                    'explanation': mistake.get('explanation', '')
+                })
+                total_mistakes += 1
+        
+        # Calculate conversation duration - handle case where lesson isn't completed yet
+        def parse_datetime_safe(datetime_str):
+            """Safely parse datetime string, handling microseconds"""
+            try:
+                # Remove Z and add timezone
+                if datetime_str.endswith('Z'):
+                    datetime_str = datetime_str.replace('Z', '+00:00')
+                
+                # Handle microseconds - truncate to 6 digits if longer
+                if '.' in datetime_str:
+                    date_part, time_part = datetime_str.split('.')
+                    if '+' in time_part:
+                        microseconds, timezone_part = time_part.split('+')
+                        microseconds = microseconds[:6].ljust(6, '0')  # Ensure exactly 6 digits
+                        datetime_str = f"{date_part}.{microseconds}+{timezone_part}"
+                    elif time_part.count(':') >= 2:  # Contains timezone offset
+                        microseconds = time_part[:6].ljust(6, '0')
+                        datetime_str = f"{date_part}.{microseconds}"
+                
+                return datetime.fromisoformat(datetime_str)
+            except Exception as e:
+                logging.error(f"[Lesson Summary] Error parsing datetime '{datetime_str}': {e}")
+                # Fallback: try without microseconds
+                try:
+                    if '.' in datetime_str:
+                        datetime_str = datetime_str.split('.')[0] + '+00:00'
+                    return datetime.fromisoformat(datetime_str)
+                except:
+                    # Last resort: return current time
+                    return datetime.now(timezone.utc)
+        
+        start_time = parse_datetime_safe(conversation_data['created_at'])
+        
+        if progress_data.get('completed_at'):
+            end_time = parse_datetime_safe(progress_data['completed_at'])
+        else:
+            # If not completed yet, use current time
+            end_time = datetime.now(timezone.utc)
+        
+        duration = end_time - start_time
+        duration_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
+        
+        # Calculate word count
+        total_words = sum(len(msg['content'].split()) for msg in user_messages)
+        
+        # Generate achievements
+        achievements = await generate_achievements(user_id, progress_data, user_messages, total_words, duration)
+        
+        # Extract new vocabulary (simplified - you could enhance this with NLP)
+        new_vocabulary = []
+        for msg in user_messages:
+            words = msg['content'].split()
+            # Simple heuristic: words longer than 5 characters that appear less frequently
+            for word in words:
+                if len(word) > 5 and word.lower() not in ['because', 'something', 'anything', 'everything']:
+                    new_vocabulary.append(word.lower())
+        
+        # Remove duplicates and limit
+        new_vocabulary = list(set(new_vocabulary))[:10]
+        
+        result = {
+            "lessonTitle": lesson_title,
+            "totalTurns": progress_data.get('turns_completed', 0),
+            "totalMistakes": total_mistakes,
+            "achievements": achievements,
+            "mistakesByCategory": list(mistake_categories.values()),
+            "conversationDuration": duration_str,
+            "wordsUsed": total_words,
+            "newVocabulary": new_vocabulary,
+            "improvementAreas": list(mistake_categories.keys())[:3]
+        }
+        
+        logging.info(f"[Lesson Summary] Successfully generated summary for progress_id: {progress_id}")
+        logging.info(f"[Lesson Summary] Lesson: {lesson_title}")
+        logging.info(f"[Lesson Summary] Achievements: {len(achievements)}")
+        logging.info(f"[Lesson Summary] Mistake categories: {len(list(mistake_categories.values()))}")
+        logging.info(f"[Lesson Summary] Conversation ID: {conversation_id}")
+        return result
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logging.error(f"Error getting lesson summary: {e}")
+        logging.error(f"Error type: {type(e)}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def generate_achievements(user_id: str, progress_data: dict, user_messages: list, total_words: int, duration: timedelta) -> list:
+    """Generate achievements based on lesson performance"""
+    achievements = []
+    
+    try:
+        logging.info(f"[Achievements] Generating achievements for user {user_id}")
+        
+        # Get user's historical data for comparison
+        all_progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('status', 'completed').execute()
+        
+        current_turns = progress_data.get('turns_completed', 0)
+        current_duration_minutes = duration.total_seconds() / 60
+        
+        logging.info(f"[Achievements] Current turns: {current_turns}, duration: {current_duration_minutes:.1f}m")
+        
+        # Achievement 1: Longest conversation
+        if all_progress.data:
+            max_turns = max([p.get('turns_completed', 0) for p in all_progress.data])
+            if current_turns >= max_turns:
+                achievements.append({
+                    'id': 'longest_conversation',
+                    'title': 'Marathon Talker! 🏃‍♂️',
+                    'description': 'Your longest conversation yet!',
+                    'icon': '💬',
+                    'type': 'new' if current_turns > max_turns else 'improved',
+                    'value': f'{current_turns} turns'
+                })
+        else:
+            # First lesson completion
+            achievements.append({
+                'id': 'first_lesson',
+                'title': 'Getting Started! 🌟',
+                'description': 'Completed your first lesson',
+                'icon': '🎉',
+                'type': 'new',
+                'value': 'First lesson'
+            })
+        
+        # Achievement 2: Word usage
+        if total_words > 100:
+            achievements.append({
+                'id': 'wordsmith',
+                'title': 'Wordsmith! 📚',
+                'description': 'Used lots of words in this conversation',
+                'icon': '📝',
+                'type': 'milestone',
+                'value': f'{total_words} words'
+            })
+        
+        # Achievement 3: Quick completion
+        required_turns = progress_data.get('required_turns', 7)
+        if current_duration_minutes < 15 and current_turns >= required_turns:
+            achievements.append({
+                'id': 'speed_talker',
+                'title': 'Speed Talker! ⚡',
+                'description': 'Completed the lesson quickly',
+                'icon': '🚀',
+                'type': 'new',
+                'value': f'{int(current_duration_minutes)}m'
+            })
+        
+        # Achievement 4: Consistent practice
+        recent_lessons = []
+        for p in (all_progress.data or []):
+            if p.get('completed_at'):
+                try:
+                    # Use the same safe datetime parsing
+                    def parse_datetime_safe_achievements(datetime_str):
+                        """Safely parse datetime string, handling microseconds"""
+                        try:
+                            if datetime_str.endswith('Z'):
+                                datetime_str = datetime_str.replace('Z', '+00:00')
+                            
+                            if '.' in datetime_str:
+                                date_part, time_part = datetime_str.split('.')
+                                if '+' in time_part:
+                                    microseconds, timezone_part = time_part.split('+')
+                                    microseconds = microseconds[:6].ljust(6, '0')
+                                    datetime_str = f"{date_part}.{microseconds}+{timezone_part}"
+                                elif time_part.count(':') >= 2:
+                                    microseconds = time_part[:6].ljust(6, '0')
+                                    datetime_str = f"{date_part}.{microseconds}"
+                            
+                            return datetime.fromisoformat(datetime_str)
+                        except:
+                            if '.' in datetime_str:
+                                datetime_str = datetime_str.split('.')[0] + '+00:00'
+                            return datetime.fromisoformat(datetime_str)
+                    
+                    completed_date = parse_datetime_safe_achievements(p['completed_at'])
+                    if completed_date > datetime.now(timezone.utc) - timedelta(days=7):
+                        recent_lessons.append(p)
+                except Exception as e:
+                    logging.warning(f"[Achievements] Error parsing completed_at for progress {p.get('id')}: {e}")
+                    continue
+        
+        if len(recent_lessons) >= 3:
+            achievements.append({
+                'id': 'consistent_learner',
+                'title': 'Consistent Learner! 🔥',
+                'description': 'Completed multiple lessons this week',
+                'icon': '🔥',
+                'type': 'improved',
+                'value': f'{len(recent_lessons)} lessons'
+            })
+        
+        # Achievement 5: Grammar variety (based on message complexity)
+        complex_sentences = sum(1 for msg in user_messages if len(msg.get('content', '').split()) > 10)
+        if complex_sentences >= 3:
+            achievements.append({
+                'id': 'complex_speaker',
+                'title': 'Complex Speaker! 🧩',
+                'description': 'Used complex sentence structures',
+                'icon': '🎯',
+                'type': 'improved',
+                'value': f'{complex_sentences} complex sentences'
+            })
+        
+        logging.info(f"[Achievements] Generated {len(achievements)} achievements")
+        return achievements
+        
+    except Exception as e:
+        logging.error(f"Error generating achievements: {e}")
+        import traceback
+        logging.error(f"Achievements traceback: {traceback.format_exc()}")
+        # Return a basic achievement if generation fails
+        return [{
+            'id': 'lesson_completed',
+            'title': 'Lesson Complete! 🎉',
+            'description': 'Successfully completed the lesson',
+            'icon': '✅',
+            'type': 'milestone',
+            'value': 'Completed'
+        }]
+
 async def get_unanalyzed_conversations(user_id: str, language: str) -> List[str]:
     """Get conversations that haven't been analyzed for user knowledge yet"""
     try:

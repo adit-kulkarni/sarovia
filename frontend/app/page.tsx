@@ -19,6 +19,7 @@ import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
 import WeaknessAnalysis from './components/WeaknessAnalysis';
+import LessonSummaryModal from './components/LessonSummaryModal';
 
 interface LanguageCard {
   code: string;
@@ -81,6 +82,38 @@ interface Feedback {
   created_at?: string;
   conversation_id?: string;
   language?: string;
+}
+
+interface LessonSummaryData {
+  lessonTitle: string;
+  totalTurns: number;
+  totalMistakes: number;
+  achievements: Achievement[];
+  mistakesByCategory: MistakeSummary[];
+  conversationDuration: string;
+  wordsUsed: number;
+  newVocabulary: string[];
+  improvementAreas: string[];
+}
+
+interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  type: 'new' | 'improved' | 'milestone';
+  value?: string | number;
+}
+
+interface MistakeSummary {
+  category: string;
+  count: number;
+  severity: 'minor' | 'moderate' | 'critical';
+  examples: Array<{
+    error: string;
+    correction: string;
+    explanation: string;
+  }>;
 }
 
 const languages: LanguageCard[] = [
@@ -172,6 +205,11 @@ const Dashboard = () => {
   const [showContextModal, setShowContextModal] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
   const [lessonProgress, setLessonProgress] = useState<Record<string, any>>({});
+  const [showLessonSummary, setShowLessonSummary] = useState(false);
+  const [lessonSummaryData, setLessonSummaryData] = useState<LessonSummaryData | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [showCompletedLessons, setShowCompletedLessons] = useState(false);
+  const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const router = useRouter();
 
   const user = useUser();
@@ -277,7 +315,10 @@ const Dashboard = () => {
 
   const handleCurriculumChange = (id: string) => {
     const found = curriculums.find(c => c.id === id);
-    if (found) setSelectedCurriculum(found);
+    if (found) {
+      setSelectedCurriculum(found);
+      setDisplayedLessonsCount(10); // Reset to show first 10 lessons
+    }
   };
 
   const handleAddLanguage = () => {
@@ -315,6 +356,49 @@ const Dashboard = () => {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.refresh();
+  };
+
+  const handleViewReportCard = async (lessonId: string) => {
+    if (!selectedCurriculum || !token) return;
+    
+    setLoadingSummary(true);
+    try {
+      // Get the progress ID for this lesson
+      const progress = lessonProgress[lessonId];
+      if (!progress || !progress.id) {
+        alert('No progress found for this lesson');
+        return;
+      }
+
+      const encodedProgressId = encodeURIComponent(progress.id);
+      const encodedToken = encodeURIComponent(token);
+      
+      const summaryUrl = `${API_BASE}/api/lesson_progress/${encodedProgressId}/summary?token=${encodedToken}`;
+      console.log('[View Report Card] Summary URL:', summaryUrl);
+      
+      const summaryResponse = await fetch(summaryUrl);
+      
+      if (summaryResponse.ok) {
+        const summaryData = await summaryResponse.json();
+        console.log('[View Report Card] Fetched summary:', summaryData);
+        setLessonSummaryData(summaryData);
+        setShowLessonSummary(true);
+      } else {
+        const errorText = await summaryResponse.text();
+        console.error('[View Report Card] Failed to fetch summary:', errorText);
+        alert('Failed to load report card. Please try again.');
+      }
+    } catch (error) {
+      console.error('[View Report Card] Error:', error);
+      alert('Failed to load report card. Please try again.');
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleCloseLessonSummary = () => {
+    setShowLessonSummary(false);
+    setLessonSummaryData(null);
   };
 
   useEffect(() => {
@@ -442,8 +526,19 @@ const Dashboard = () => {
           Curriculum
         </h2>
         <div className="px-10">
-          <div className="flex space-x-6 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
-            {lessonTemplates.slice(0, 15).map(lesson => {
+          {(() => {
+            // Separate lessons by completion status
+            const activeLessons = lessonTemplates.slice(0, displayedLessonsCount).filter(lesson => {
+              const progress = lesson.progress;
+              return progress?.status !== 'completed';
+            });
+            
+            const completedLessons = lessonTemplates.slice(0, displayedLessonsCount).filter(lesson => {
+              const progress = lesson.progress;
+              return progress?.status === 'completed';
+            });
+
+            const renderLessonCard = (lesson: any, isCompact = false) => {
               const progress = lesson.progress;
               const isCompleted = progress?.status === 'completed';
               const isInProgress = progress?.status === 'in_progress';
@@ -452,14 +547,14 @@ const Dashboard = () => {
               return (
                 <div
                   key={lesson.id}
-                  className={`flex flex-col justify-between min-w-[320px] max-w-[340px] bg-white rounded-2xl shadow-lg border p-0 overflow-hidden ${
+                  className={`flex flex-col justify-between ${isCompact ? 'min-w-[260px] max-w-[280px]' : 'min-w-[320px] max-w-[340px]'} bg-white rounded-2xl shadow-lg border p-0 overflow-hidden ${
                     isCompleted ? 'border-green-200' : isInProgress ? 'border-orange-200' : 'border-gray-100'
                   }`}
                   style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
                 >
                   {/* Progress Status Badge */}
                   {progress && (
-                    <div className="px-5 pt-3">
+                    <div className={`${isCompact ? 'px-4 pt-2' : 'px-5 pt-3'}`}>
                       <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                         isCompleted 
                           ? 'bg-green-100 text-green-800' 
@@ -473,19 +568,19 @@ const Dashboard = () => {
                   )}
                   
                   {/* Top: Level & Difficulty */}
-                  <div className="px-5 pt-4 pb-1">
+                  <div className={`${isCompact ? 'px-4 pt-3 pb-1' : 'px-5 pt-4 pb-1'}`}>
                     <div className="text-xs text-gray-500 font-semibold mb-1">
                       Level: {lesson.level || 'N/A'} &bull; Difficulty: {lesson.difficulty || 'N/A'}
                     </div>
                     {/* Title */}
-                    <div className="text-xl font-bold text-gray-900 mb-2">
+                    <div className={`${isCompact ? 'text-lg' : 'text-xl'} font-bold text-gray-900 mb-2`}>
                       {lesson.title}
                     </div>
                   </div>
                   
                   {/* Progress Bar (if in progress) */}
                   {progress && isInProgress && (
-                    <div className="px-5 pb-2">
+                    <div className={`${isCompact ? 'px-4 pb-2' : 'px-5 pb-2'}`}>
                       <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
                         <div 
                           className="bg-orange-500 h-2 rounded-full transition-all duration-300"
@@ -499,14 +594,25 @@ const Dashboard = () => {
                   )}
                   
                   {/* Description */}
-                  <div className="px-5 pb-4 text-sm text-gray-700 flex-1">
-                    {lesson.objectives || <span className="italic text-gray-400">No description</span>}
-                  </div>
+                  {!isCompact && (
+                    <div className="px-5 pb-4 text-sm text-gray-700 flex-1">
+                      {lesson.objectives || <span className="italic text-gray-400">No description</span>}
+                    </div>
+                  )}
                   
-                  {/* Bottom: Start Lesson Button */}
-                  <div className="px-5 h-16 flex items-center justify-end border-t border-gray-100 bg-gray-50">
+                  {/* Bottom: Action Buttons */}
+                  <div className={`${isCompact ? 'px-4 h-14' : 'px-5 h-16'} flex items-center justify-end border-t border-gray-100 bg-gray-50 gap-2`}>
+                    {isCompleted && (
+                      <button
+                        className={`${isCompact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors bg-blue-500 hover:bg-blue-600 text-white`}
+                        onClick={() => handleViewReportCard(lesson.id)}
+                        disabled={loadingSummary}
+                      >
+                        {loadingSummary ? 'Loading...' : '📊 Report Card'}
+                      </button>
+                    )}
                     <button
-                      className={`px-5 py-2 mx-2 rounded-lg font-semibold shadow transition-colors text-sm ${
+                      className={`${isCompact ? 'px-4 py-1.5 text-xs' : 'px-5 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors ${
                         isCompleted 
                           ? 'bg-green-500 hover:bg-green-600 text-white' 
                           : isInProgress 
@@ -519,12 +625,88 @@ const Dashboard = () => {
                     </button>
                   </div>
                 </div>
-                             );
-             })}
-              {lessonTemplates.length === 0 && !loading && (
-              <div className="text-gray-400">No lessons found for this curriculum.</div>
-            )}
-          </div>
+              );
+            };
+
+            return (
+              <>
+                {/* Active Lessons (In Progress + Not Started) */}
+                {(activeLessons.length > 0 || lessonTemplates.length > displayedLessonsCount) && (
+                  <div className="mb-8">
+                    <div className="flex space-x-6 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
+                      {activeLessons.map(lesson => renderLessonCard(lesson, false))}
+                      
+                      {/* Load More Card - appears inline with lesson cards */}
+                      {lessonTemplates.length > displayedLessonsCount && (
+                        <div
+                          className="flex flex-col justify-center items-center min-w-[320px] max-w-[340px] bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl shadow-lg border-2 border-dashed border-orange-300 p-8 cursor-pointer hover:border-orange-500 hover:bg-gradient-to-br hover:from-orange-100 hover:to-orange-200 transition-all duration-200 group"
+                          style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
+                          onClick={() => setDisplayedLessonsCount(prev => prev + 10)}
+                        >
+                          <div className="bg-orange-500 text-white rounded-full p-4 mb-4 group-hover:scale-110 transition-transform duration-200">
+                            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" />
+                            </svg>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-orange-800 mb-2">Load More Lessons</div>
+                            <div className="text-sm text-orange-600">
+                              {lessonTemplates.length - displayedLessonsCount} more lessons available
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Completed Lessons - Collapsible Section */}
+                {completedLessons.length > 0 && (
+                  <div className="mb-4">
+                    <button
+                      onClick={() => setShowCompletedLessons(!showCompletedLessons)}
+                      className="w-full mb-4 p-4 bg-green-50 hover:bg-green-100 border-2 border-green-200 rounded-xl transition-colors duration-200 focus:outline-none focus:ring-4 focus:ring-green-100"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-green-500 text-white rounded-full p-2">
+                            ✅
+                          </div>
+                          <div className="text-left">
+                            <h3 className="text-lg font-bold text-green-800">
+                              Completed Lessons ({completedLessons.length})
+                            </h3>
+                            <p className="text-sm text-green-600">
+                              Great job! Click to view your completed lessons
+                            </p>
+                          </div>
+                        </div>
+                        <div className={`transform transition-transform duration-200 ${showCompletedLessons ? 'rotate-180' : ''}`}>
+                          <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </div>
+                      </div>
+                    </button>
+                    
+                    {/* Expanded Completed Lessons */}
+                    {showCompletedLessons && (
+                      <div className="flex space-x-4 overflow-x-auto pb-2 bg-green-50/50 rounded-xl p-4 border border-green-200" style={{ WebkitOverflowScrolling: 'touch' }}>
+                        {completedLessons.map(lesson => renderLessonCard(lesson, true))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+
+                
+                {/* Empty State */}
+                {lessonTemplates.length === 0 && !loading && (
+                  <div className="text-gray-400 text-center py-8">No lessons found for this curriculum.</div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -853,6 +1035,15 @@ const Dashboard = () => {
           </div>
         </Dialog>
       </Transition.Root>
+
+      {/* Lesson Summary Modal */}
+      <LessonSummaryModal
+        isOpen={showLessonSummary}
+        onClose={handleCloseLessonSummary}
+        onReturnToDashboard={handleCloseLessonSummary}
+        summaryData={lessonSummaryData}
+        loading={loadingSummary}
+      />
 
       {error && (
         <div className="mt-6 text-red-500 text-center">{error}</div>
