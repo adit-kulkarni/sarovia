@@ -18,6 +18,7 @@ import { Dialog, Transition } from '@headlessui/react';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
+import WeaknessAnalysis from './components/WeaknessAnalysis';
 
 interface LanguageCard {
   code: string;
@@ -507,6 +508,14 @@ const Dashboard = () => {
               </div>
               {/* Right Column */}
               <div className="space-y-6">
+                {/* Weakness Analysis and Custom Lessons */}
+                <div className="bg-white rounded-lg shadow p-6">
+                  <WeaknessAnalysis 
+                    curriculumId={selectedCurriculum.id} 
+                    language={selectedCurriculum.language}
+                    token={token || ''}
+                  />
+                </div>
                 {/* 4. Progress Over Time */}
                 <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
                   <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>

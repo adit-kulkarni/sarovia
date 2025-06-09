@@ -530,8 +530,50 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                 context = conversation.get('context', 'restaurant')
                 curriculum_id = conversation.get('curriculum_id')
                 lesson_id = conversation.get('lesson_id')
+                custom_lesson_id = conversation.get('custom_lesson_id')
+                
+                # If custom_lesson_id is present, fetch custom lesson and build instructions
+                if custom_lesson_id:
+                    custom_lesson_result = supabase.table('custom_lesson_templates').select('*').eq('id', custom_lesson_id).execute()
+                    if not custom_lesson_result.data:
+                        raise ValueError("Custom lesson template not found for conversation")
+                    custom_lesson = custom_lesson_result.data[0]
+                    level = custom_lesson.get('difficulty', level)
+                    context = f"Custom Lesson: {custom_lesson.get('title', '')}"
+                    
+                    # Build custom instructions for custom lesson
+                    base_instructions = f"""
+You are a {language} teacher conducting a custom lesson designed to address the student's specific weaknesses.
+
+LESSON DETAILS:
+Title: {custom_lesson.get('title', '')}
+Difficulty: {custom_lesson.get('difficulty', '')}
+Targeted Weaknesses: {', '.join(custom_lesson.get('targeted_weaknesses', []))}
+
+LESSON OBJECTIVES:
+{custom_lesson.get('objectives', '')}
+
+LESSON CONTENT:
+{custom_lesson.get('content', '')}
+
+CULTURAL ELEMENT:
+{custom_lesson.get('cultural_element', '')}
+
+PRACTICE ACTIVITY:
+{custom_lesson.get('practice_activity', '')}
+
+IMPORTANT INSTRUCTIONS:
+- Focus specifically on the targeted weakness areas mentioned above
+- Provide immediate corrections when students make the types of mistakes this lesson addresses
+- Be patient and encouraging, as these are areas the student struggles with
+- Use examples and exercises that directly relate to their common mistakes
+- Speak at the {level} CEFR level with appropriate complexity
+- Provide English explanations when needed to clarify difficult concepts
+"""
+                    custom_instructions = base_instructions
+                
                 # If lesson_id is present, fetch lesson template and build custom instructions
-                if lesson_id:
+                elif lesson_id:
                     lesson_result = supabase.table('lesson_templates').select('*').eq('id', lesson_id).execute()
                     if not lesson_result.data:
                         raise ValueError("Lesson template not found for conversation")
@@ -550,7 +592,8 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
                     base_instructions += "\n\nThe conversation body is determined by \"Objectives\" below. You can take inspiration from Content, cultural element, and practice activity. Do not stray from this brief. Speak ONLY in present tense, even if the user asks about the past or future.\n\n"
                     base_instructions += f"### Lesson: {lesson.get('title', '')}\n**Difficulty**: {lesson.get('difficulty', '')}  \n**Objectives**: {lesson.get('objectives', '')}  \n**Content**: {lesson.get('content', '')}  \n**Cultural Element**: {lesson.get('cultural_element', '')}  \n**Practice Activity**: {lesson.get('practice_activity', '')}\n"
                     custom_instructions = base_instructions
-                logging.info(f"[Connection {connection_id}] Loaded conversation_id={conversation_id}, context={context}, curriculum_id={curriculum_id}, level={level}, language={language}, lesson_id={lesson_id}, custom_instructions={'yes' if custom_instructions else 'no'}")
+                    
+                logging.info(f"[Connection {connection_id}] Loaded conversation_id={conversation_id}, context={context}, curriculum_id={curriculum_id}, level={level}, language={language}, lesson_id={lesson_id}, custom_lesson_id={custom_lesson_id}, custom_instructions={'yes' if custom_instructions else 'no'}")
                 if not curriculum_id:
                     raise ValueError("curriculum_id is required for conversation")
             else:
@@ -1144,6 +1187,418 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
     # Otherwise, return default instructions
     instructions = get_level_specific_instructions(conversation['level'], conversation['context'], conversation['language'])
     return JSONResponse({"instructions": instructions})
+
+# Add new models for custom lesson generation
+class WeaknessPattern(BaseModel):
+    category: str
+    type: str
+    frequency: int
+    severity_distribution: dict
+    examples: List[dict]
+    language_feature_tags: List[str]
+
+class CustomLessonRequest(BaseModel):
+    curriculum_id: str
+    weakness_patterns: List[str]  # Specific areas to target
+
+class GeneratedLesson(BaseModel):
+    title: str
+    difficulty: str
+    objectives: str
+    content: str
+    cultural_element: str
+    practice_activity: str
+    targeted_weaknesses: List[str]
+
+@app.get("/api/analyze_weaknesses")
+async def analyze_user_weaknesses(curriculum_id: str, token: str = Query(...)):
+    """Analyze user's mistake patterns to identify areas of weakness."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        language = curriculum.data[0]['language']
+        
+        # Get all conversations for this curriculum
+        conversations = supabase.table('conversations').select('id').eq('user_id', user_id).eq('curriculum_id', curriculum_id).execute()
+        conversation_ids = [c['id'] for c in conversations.data]
+        
+        if not conversation_ids:
+            return {"weakness_patterns": [], "message": "No conversation data found"}
+        
+        # Get all feedback for these conversations
+        all_mistakes = []
+        for conv_id in conversation_ids:
+            messages = supabase.table('messages').select('id').eq('conversation_id', conv_id).eq('role', 'user').execute()
+            message_ids = [m['id'] for m in messages.data]
+            
+            for msg_id in message_ids:
+                feedback = supabase.table('message_feedback').select('mistakes').eq('message_id', msg_id).execute()
+                for fb in feedback.data:
+                    all_mistakes.extend(fb['mistakes'])
+        
+        if not all_mistakes:
+            return {"weakness_patterns": [], "message": "No mistakes found to analyze"}
+        
+        # Analyze patterns
+        weakness_patterns = analyze_mistake_patterns(all_mistakes, language)
+        
+        return {"weakness_patterns": weakness_patterns}
+        
+    except Exception as e:
+        logging.error(f"Error analyzing weaknesses: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def analyze_mistake_patterns(mistakes: List[dict], language: str) -> List[dict]:
+    """Analyze mistakes to identify patterns of weakness."""
+    # Group mistakes by category and type
+    pattern_analysis = {}
+    
+    for mistake in mistakes:
+        category = mistake.get('category', 'other')
+        mistake_type = mistake.get('type', 'other')
+        severity = mistake.get('severity', 'minor')
+        
+        # Create a key for this pattern
+        pattern_key = f"{category}:{mistake_type}"
+        
+        if pattern_key not in pattern_analysis:
+            pattern_analysis[pattern_key] = {
+                'category': category,
+                'type': mistake_type,
+                'frequency': 0,
+                'severity_distribution': {'minor': 0, 'moderate': 0, 'critical': 0},
+                'examples': [],
+                'language_feature_tags': set()
+            }
+        
+        pattern_analysis[pattern_key]['frequency'] += 1
+        pattern_analysis[pattern_key]['severity_distribution'][severity] += 1
+        
+        # Add example (limit to 3 per pattern)
+        if len(pattern_analysis[pattern_key]['examples']) < 3:
+            pattern_analysis[pattern_key]['examples'].append({
+                'error': mistake.get('error', ''),
+                'correction': mistake.get('correction', ''),
+                'explanation': mistake.get('explanation', '')
+            })
+        
+        # Add language feature tags
+        tags = mistake.get('languageFeatureTags', [])
+        if tags:
+            pattern_analysis[pattern_key]['language_feature_tags'].update(tags)
+    
+    # Convert to list and filter for significant patterns (frequency >= 2)
+    significant_patterns = []
+    for pattern in pattern_analysis.values():
+        if pattern['frequency'] >= 2:  # Only patterns that occur multiple times
+            pattern['language_feature_tags'] = list(pattern['language_feature_tags'])
+            significant_patterns.append(pattern)
+    
+    # Sort by frequency and severity (critical/moderate mistakes get priority)
+    def pattern_priority(pattern):
+        critical_weight = pattern['severity_distribution']['critical'] * 3
+        moderate_weight = pattern['severity_distribution']['moderate'] * 2
+        minor_weight = pattern['severity_distribution']['minor'] * 1
+        return critical_weight + moderate_weight + minor_weight
+    
+    significant_patterns.sort(key=pattern_priority, reverse=True)
+    
+    return significant_patterns[:10]  # Return top 10 patterns
+
+@app.post("/api/generate_custom_lesson")
+async def generate_custom_lesson(request: CustomLessonRequest, token: str = Query(...)):
+    """Generate a custom lesson targeting specific weakness patterns."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('*').eq('id', request.curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        curriculum_data = curriculum.data[0]
+        language = curriculum_data['language']
+        level = curriculum_data['start_level']
+        
+        # Get weakness analysis directly (not through API call)
+        # Get all conversations for this curriculum
+        conversations = supabase.table('conversations').select('id').eq('user_id', user_id).eq('curriculum_id', request.curriculum_id).execute()
+        conversation_ids = [c['id'] for c in conversations.data]
+        
+        if not conversation_ids:
+            raise HTTPException(status_code=400, detail="No conversation data found")
+        
+        # Get all feedback for these conversations
+        all_mistakes = []
+        for conv_id in conversation_ids:
+            messages = supabase.table('messages').select('id').eq('conversation_id', conv_id).eq('role', 'user').execute()
+            message_ids = [m['id'] for m in messages.data]
+            
+            for msg_id in message_ids:
+                feedback = supabase.table('message_feedback').select('mistakes').eq('message_id', msg_id).execute()
+                for fb in feedback.data:
+                    all_mistakes.extend(fb['mistakes'])
+        
+        if not all_mistakes:
+            raise HTTPException(status_code=400, detail="No mistakes found to analyze")
+        
+        # Analyze patterns - focus on the most common mistake (top 1)
+        patterns = analyze_mistake_patterns(all_mistakes, language)
+        
+        if not patterns:
+            raise HTTPException(status_code=400, detail="No weakness patterns found")
+        
+        # Focus on just the most common pattern for simplicity
+        top_pattern = patterns[0]
+        
+        # Generate custom lesson using OpenAI
+        lesson = await generate_lesson_with_openai([top_pattern], language, level)
+        
+        # Return lesson data without saving - let frontend handle preview/save
+        lesson_data = {
+            'title': lesson['title'],
+            'language': language,
+            'difficulty': lesson['difficulty'],
+            'objectives': lesson['objectives'],
+            'content': lesson['content'],
+            'cultural_element': lesson['cultural_element'],
+            'practice_activity': lesson['practice_activity'],
+            'targeted_weaknesses': lesson['targeted_weaknesses'],
+            'curriculum_id': request.curriculum_id,
+            'user_id': user_id,
+        }
+        
+        return lesson_data
+        
+    except Exception as e:
+        logging.error(f"Error generating custom lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def generate_lesson_with_openai(patterns: List[dict], language: str, level: str) -> dict:
+    """Use OpenAI to generate a custom lesson targeting specific weaknesses."""
+    
+    # Build context about the weaknesses
+    weakness_context = []
+    for pattern in patterns[:5]:  # Focus on top 5 patterns
+        examples = "; ".join([f"'{ex['error']}' → '{ex['correction']}'" for ex in pattern['examples'][:2]])
+        weakness_context.append(
+            f"- {pattern['category']} ({pattern['type']}): {pattern['frequency']} occurrences. "
+            f"Examples: {examples}"
+        )
+    
+    weakness_summary = "\n".join(weakness_context)
+    
+    prompt = f"""Create a custom {language} lesson for a {level} level student targeting their specific weaknesses.
+
+WEAKNESS PATTERNS TO ADDRESS:
+{weakness_summary}
+
+Generate a lesson that specifically targets these weakness areas. The lesson should:
+1. Focus on the most frequent and severe mistake patterns
+2. Be written primarily in ENGLISH for clear understanding
+3. Include examples in {language} to demonstrate the concepts
+4. Be concise and practical
+5. Be appropriate for {level} level
+
+Respond with a JSON object in this exact format:
+{{
+    "title": "Concise lesson title focusing on the main weakness (in English)",
+    "difficulty": "{level}",
+    "objectives": "2-3 clear, specific learning objectives in English (max 150 characters)",
+    "content": "Concise explanation of the grammar/vocabulary concept in English with {language} examples (max 300 characters)",
+    "cultural_element": "Brief cultural context relevant to the lesson (max 150 characters)",
+    "practice_activity": "Specific, actionable exercise description in English (max 200 characters)",
+    "targeted_weaknesses": ["list", "of", "specific", "weakness", "types", "addressed"]
+}}
+
+Keep all text concise and focused. Use {language} only for examples within the English explanations.
+"""
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4-turbo-preview",
+                "messages": [{"role": "system", "content": prompt}],
+                "temperature": 0.7,
+                "response_format": {"type": "json_object"}
+            }
+        ) as response:
+            if response.status != 200:
+                raise Exception(f"OpenAI API error: {await response.text()}")
+            
+            response_data = await response.json()
+            lesson_data = json.loads(response_data["choices"][0]["message"]["content"])
+            
+            return lesson_data
+
+@app.get("/api/custom_lessons")
+async def list_custom_lessons(curriculum_id: str, token: str = Query(...)):
+    """List custom lessons for a curriculum."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        result = supabase.table('custom_lesson_templates').select('*').eq('curriculum_id', curriculum_id).eq('user_id', user_id).order('created_at', desc=True).execute()
+        return result.data
+        
+    except Exception as e:
+        logging.error(f"Error listing custom lessons: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/custom_lessons/{lesson_id}")
+async def delete_custom_lesson(lesson_id: str, token: str = Query(...)):
+    """Delete a custom lesson."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify ownership
+        lesson = supabase.table('custom_lesson_templates').select('*').eq('id', lesson_id).eq('user_id', user_id).execute()
+        if not lesson.data:
+            raise HTTPException(status_code=404, detail="Custom lesson not found")
+        
+        supabase.table('custom_lesson_templates').delete().eq('id', lesson_id).eq('user_id', user_id).execute()
+        return {"deleted": True}
+        
+    except Exception as e:
+        logging.error(f"Error deleting custom lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/start_custom_lesson_conversation")
+async def start_custom_lesson_conversation(
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Start a conversation for a custom lesson."""
+    custom_lesson_id = request.get('custom_lesson_id')
+    curriculum_id = request.get('curriculum_id')
+    
+    if not custom_lesson_id or not curriculum_id:
+        raise HTTPException(status_code=400, detail="custom_lesson_id and curriculum_id are required")
+    
+    user_payload = verify_jwt(token)
+    user_id = user_payload["sub"]
+    
+    # Fetch custom lesson
+    lesson_result = supabase.table('custom_lesson_templates').select('*').eq('id', custom_lesson_id).eq('user_id', user_id).execute()
+    if not lesson_result.data:
+        raise HTTPException(status_code=404, detail="Custom lesson not found")
+    
+    lesson = lesson_result.data[0]
+    
+    # Verify curriculum ownership
+    curriculum_result = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+    if not curriculum_result.data:
+        raise HTTPException(status_code=404, detail="Curriculum not found")
+    
+    curriculum = curriculum_result.data[0]
+    language = curriculum['language']
+    level = lesson.get('difficulty', curriculum.get('start_level', 'A1'))
+    
+    # Create custom instructions for this lesson
+    base_instructions = f"""
+You are a {language} teacher conducting a custom lesson designed to address the student's specific weaknesses.
+
+LESSON DETAILS:
+Title: {lesson.get('title', '')}
+Difficulty: {lesson.get('difficulty', '')}
+Targeted Weaknesses: {', '.join(lesson.get('targeted_weaknesses', []))}
+
+LESSON OBJECTIVES:
+{lesson.get('objectives', '')}
+
+LESSON CONTENT:
+{lesson.get('content', '')}
+
+CULTURAL ELEMENT:
+{lesson.get('cultural_element', '')}
+
+PRACTICE ACTIVITY:
+{lesson.get('practice_activity', '')}
+
+IMPORTANT INSTRUCTIONS:
+- Focus specifically on the targeted weakness areas mentioned above
+- Provide immediate corrections when students make the types of mistakes this lesson addresses
+- Be patient and encouraging, as these are areas the student struggles with
+- Use examples and exercises that directly relate to their common mistakes
+- Speak at the {level} CEFR level with appropriate complexity
+- Provide English explanations when needed to clarify difficult concepts
+"""
+    
+    # Create conversation
+    conversation_result = supabase.table('conversations').insert({
+        'user_id': user_id,
+        'context': f"Custom Lesson: {lesson.get('title', '')}",
+        'language': language,
+        'level': level,
+        'curriculum_id': curriculum_id,
+        'custom_lesson_id': custom_lesson_id
+    }).execute()
+    
+    conversation_id = conversation_result.data[0]['id']
+    
+    return {
+        "conversation_id": conversation_id,
+        "level": level,
+        "language": language,
+        "custom_instructions": base_instructions,
+        "lesson_title": lesson.get('title', ''),
+        "targeted_weaknesses": lesson.get('targeted_weaknesses', [])
+    }
+
+@app.post("/api/save_custom_lesson")
+async def save_custom_lesson(
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Save a custom lesson after user preview and confirmation."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum_id = request.get('curriculum_id')
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Save as custom lesson template
+        custom_lesson = supabase.table('custom_lesson_templates').insert({
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'title': request.get('title'),
+            'language': request.get('language'),
+            'difficulty': request.get('difficulty'),
+            'objectives': request.get('objectives'),
+            'content': request.get('content'),
+            'cultural_element': request.get('cultural_element'),
+            'practice_activity': request.get('practice_activity'),
+            'targeted_weaknesses': request.get('targeted_weaknesses', []),
+            'order_num': 999  # Custom lessons get high order numbers
+        }).execute()
+        
+        return custom_lesson.data[0]
+        
+    except Exception as e:
+        logging.error(f"Error saving custom lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
