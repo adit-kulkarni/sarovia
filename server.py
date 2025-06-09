@@ -34,6 +34,39 @@ if not API_KEY:
 
 WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17'
 
+# Initialize spaCy models
+nlp_models = {}
+
+def get_nlp_model(language: str):
+    """Get or load spaCy model for the specified language"""
+    global nlp_models
+    
+    if language in nlp_models:
+        return nlp_models[language]
+    
+    # Map language codes to spaCy model names
+    spacy_models = {
+        'en': 'en_core_web_sm',
+        'es': 'es_core_news_sm',
+        'fr': 'fr_core_news_sm',
+        'de': 'de_core_news_sm',
+        'it': 'it_core_news_sm',
+        'pt': 'pt_core_news_sm'
+    }
+    
+    model_name = spacy_models.get(language, 'en_core_web_sm')
+    
+    try:
+        nlp_models[language] = spacy.load(model_name)
+        logging.info(f"Loaded spaCy model {model_name} for language {language}")
+        return nlp_models[language]
+    except OSError:
+        logging.warning(f"spaCy model {model_name} not found, falling back to English model")
+        if 'en' not in nlp_models:
+            nlp_models['en'] = spacy.load('en_core_web_sm')
+        nlp_models[language] = nlp_models['en']
+        return nlp_models[language]
+
 # Language configuration
 LANGUAGES = {
     'en': 'English',
@@ -389,12 +422,14 @@ async def process_feedback_background(message_id: str, language: str, level: str
         except Exception as ws_error:
             logging.error(f"[Background] Error sending feedback error to client: {ws_error}")
 
-async def handle_openai_response_with_callback(ws, client_ws, level, context, language, on_openai_session_created, custom_instructions=None):
+async def handle_openai_response_with_callback(ws, client_ws, level, context, language, on_openai_session_created, custom_instructions=None, initial_turns=0):
     handler_id = str(uuid.uuid4())[:8]
     response_created = False
     conversation_id = None
     openai_session_confirmed = False
     on_openai_session_created_called = False
+    current_turns = initial_turns  # Initialize with existing turn count for continuing conversations
+    logging.info(f"[Handler {handler_id}] Starting with initial_turns={initial_turns}")
     try:
         while True:
             message = await ws.recv()
@@ -455,11 +490,14 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                 await forward_to_openai(ws, response_create)
                 response_created = True
                 logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
-            # Save assistant messages (final transcript)
+            # Save assistant messages (final transcript) and update turn count
             elif event_type == 'response.audio_transcript.done' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
                     asyncio.create_task(save_message(conversation_id, 'assistant', transcript))
+                    # Increment turn count when assistant completes response
+                    current_turns += 1
+                    asyncio.create_task(update_lesson_progress_turns(conversation_id, current_turns, client_ws))
             # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
@@ -518,6 +556,122 @@ async def save_message(conversation_id: str, role: str, content: str):
     except Exception as e:
         logging.error(f"Error saving message: {e}")
         raise
+
+def get_required_turns_for_difficulty(difficulty: str) -> int:
+    """Get required turns based on lesson difficulty"""
+    difficulty_map = {
+        'easy': 7,
+        'medium': 9,
+        'challenging': 11
+    }
+    return difficulty_map.get(difficulty.lower(), 7)
+
+async def get_or_create_lesson_progress(conversation_id: str, user_id: str) -> dict:
+    """Get or create lesson progress record for a conversation"""
+    try:
+        # Get conversation details
+        conversation = supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+        if not conversation.data:
+            return None
+        
+        conv_data = conversation.data[0]
+        lesson_id = conv_data.get('lesson_id')
+        custom_lesson_id = conv_data.get('custom_lesson_id')
+        curriculum_id = conv_data.get('curriculum_id')
+        
+        if not curriculum_id or (not lesson_id and not custom_lesson_id):
+            # Not a lesson conversation
+            return None
+        
+        # Check if progress record exists
+        progress_query = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('curriculum_id', curriculum_id)
+        
+        if lesson_id:
+            progress_query = progress_query.eq('lesson_id', lesson_id)
+        elif custom_lesson_id:
+            progress_query = progress_query.eq('custom_lesson_id', custom_lesson_id)
+        
+        progress_result = progress_query.execute()
+        
+        if progress_result.data:
+            return progress_result.data[0]
+        
+        # Create new progress record
+        difficulty = 'easy'  # Default
+        required_turns = 7
+        
+        if lesson_id:
+            # Get difficulty from lesson template
+            lesson_template = supabase.table('lesson_templates').select('difficulty').eq('id', lesson_id).execute()
+            if lesson_template.data:
+                difficulty = lesson_template.data[0].get('difficulty', 'easy')
+        elif custom_lesson_id:
+            # Get difficulty from custom lesson
+            custom_lesson = supabase.table('custom_lesson_templates').select('difficulty').eq('id', custom_lesson_id).execute()
+            if custom_lesson.data:
+                difficulty = custom_lesson.data[0].get('difficulty', 'easy')
+        
+        required_turns = get_required_turns_for_difficulty(difficulty)
+        
+        # Create progress record
+        progress_data = {
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'status': 'in_progress',
+            'required_turns': required_turns,
+            'started_at': datetime.now().isoformat()
+        }
+        
+        if lesson_id:
+            progress_data['lesson_id'] = lesson_id
+        elif custom_lesson_id:
+            progress_data['custom_lesson_id'] = custom_lesson_id
+        
+        new_progress = supabase.table('lesson_progress').insert(progress_data).execute()
+        return new_progress.data[0] if new_progress.data else None
+        
+    except Exception as e:
+        logging.error(f"Error getting/creating lesson progress: {e}")
+        return None
+
+async def update_lesson_progress_turns(conversation_id: str, turns: int, client_ws):
+    """Update lesson progress with current turn count"""
+    try:
+        # Get conversation details to find user_id
+        conversation = supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+        if not conversation.data:
+            return
+        
+        conv_data = conversation.data[0]
+        user_id = conv_data['user_id']
+        
+        # Get or create progress record
+        progress = await get_or_create_lesson_progress(conversation_id, user_id)
+        if not progress:
+            return
+        
+        # Update turn count
+        supabase.table('lesson_progress').update({
+            'turns_completed': turns,
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', progress['id']).execute()
+        
+        # Send progress update to client
+        can_complete = turns >= progress['required_turns']
+        await client_ws.send_json({
+            "type": "lesson.progress",
+            "turns": turns,
+            "required": progress['required_turns'],
+            "can_complete": can_complete,
+            "lesson_id": progress.get('lesson_id'),
+            "custom_lesson_id": progress.get('custom_lesson_id'),
+            "progress_id": progress['id']
+        })
+        
+        logging.info(f"[Progress] Updated lesson progress: {turns}/{progress['required_turns']} turns, can_complete={can_complete}")
+        
+    except Exception as e:
+        logging.error(f"Error updating lesson progress: {e}")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
@@ -641,6 +795,19 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
                 await websocket.send_json({"error": "Failed to connect to OpenAI service"})
                 await websocket.close(code=1011, reason="Failed to connect to OpenAI service")
             return
+        
+        # Get initial turn count for existing lesson conversations
+        initial_turns = 0
+        if conversation_id and (lesson_id or custom_lesson_id):
+            try:
+                # Get existing lesson progress to continue from current turn count
+                progress = await get_or_create_lesson_progress(conversation_id, user_id)
+                if progress:
+                    initial_turns = progress.get('turns_completed', 0)
+                    logging.info(f"[Connection {connection_id}] Found existing lesson progress: {initial_turns} turns completed")
+            except Exception as e:
+                logging.warning(f"[Connection {connection_id}] Could not load lesson progress: {e}")
+        
         # Create callback for when OpenAI session is created
         async def on_openai_session_created():
             nonlocal conversation_id
@@ -663,7 +830,7 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
         # Start handling OpenAI responses
         openai_handler = asyncio.create_task(
             handle_openai_response_with_callback(
-                openai_ws, websocket, level, context, language, on_openai_session_created, custom_instructions
+                openai_ws, websocket, level, context, language, on_openai_session_created, custom_instructions, initial_turns
             )
         )
         # Main client message loop - only handle client->OpenAI messages
@@ -1052,69 +1219,78 @@ async def get_user_knowledge(language: str, token: str = Query(...)):
 async def generate_user_knowledge(request: Request, language: str = Query(...), token: str = Query(...)):
     user_payload = verify_jwt(token)
     user_id = user_payload["sub"]
-    # Check if already exists
-    existing = supabase.table('user_knowledge').select('id').eq('user_id', user_id).eq('language', language).execute()
-    if existing.data:
-        return {"error": "Knowledge report already exists. Delete it first if you want to regenerate."}
-    # Fetch all user messages for this language
-    conversations = supabase.table('conversations').select('id').eq('user_id', user_id).eq('language', language).execute()
-    conversation_ids = [c['id'] for c in conversations.data]
-    messages = []
-    for cid in conversation_ids:
-        res = supabase.table('messages').select('content', 'role').eq('conversation_id', cid).eq('role', 'user').order('created_at', desc=False).execute()
-        messages.extend([m['content'] for m in res.data if m['role'] == 'user'])
-    if not messages:
-        return {"error": "No user messages found for this language."}
-    # Build prompt
-    transcript = "\n".join(messages)
-    prompt = f"""
-You are a language learning assistant. Analyze the following transcript of a user's {language} messages. For each part of speech, provide a list of unique words the user has used:\n- nouns\n- pronouns\n- adjectives\n- verbs (for each verb, list the lemma, and for each lemma, all tenses and persons used)\n- adverbs\n- prepositions\n- conjunctions\n- articles\n- interjections\n\nOutput ONLY a valid JSON object with this structure, and nothing else (no markdown, no explanation, no code block):\n{{\n  \"nouns\": [\"...\"],\n  \"pronouns\": [\"...\"],\n  \"adjectives\": [\"...\"],\n  \"verbs\": {{\n    \"lemma\": {{\n      \"tense\": [\"person1\", \"person2\", ...],\n      ...\n    }},\n    ...\n  }},\n  \"adverbs\": [\"...\"],\n  \"prepositions\": [\"...\"],\n  \"conjunctions\": [\"...\"],\n  \"articles\": [\"...\"],\n  \"interjections\": [\"...\"]\n}}\n\nHere is the transcript:\n{transcript}\n"""
-    # Call OpenAI API (sync for now)
-    import aiohttp
-    import re
-    async def analyze_with_openai(prompt):
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "gpt-4-turbo-preview",
-            "messages": [{"role": "system", "content": prompt}],
-            "temperature": 0.3,
-            "max_tokens": 1500
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                data = await response.json()
-                return data["choices"][0]["message"]["content"]
-    def extract_json_from_response(text):
-        text = text.strip()
-        if text.startswith('```'):
-            text = re.sub(r'^```[a-zA-Z]*', '', text)
-            text = text.strip('`\n')
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            json_str = match.group(0)
-            try:
-                return json.loads(json_str)
-            except Exception:
-                pass
-        try:
-            return json.loads(text)
-        except Exception:
-            return None
-    result = await analyze_with_openai(prompt)
-    parsed = extract_json_from_response(result)
-    if parsed is None:
-        return {"error": "Failed to parse LLM output as JSON.", "raw": result}
-    # Store in DB
-    supabase.table('user_knowledge').insert({
-        'user_id': user_id,
-        'language': language,
-        'knowledge_json': parsed
-    }).execute()
-    return {"knowledge": parsed}
+    
+    try:
+        # Use the new incremental update system
+        success = await update_user_knowledge_incrementally(user_id, language)
+        
+        if success:
+            # Return the updated knowledge
+            result = supabase.table('user_knowledge').select('knowledge_json').eq('user_id', user_id).eq('language', language).execute()
+            if result.data:
+                return {"knowledge": result.data[0]['knowledge_json']}
+            else:
+                return {"error": "No conversations found to analyze for this language."}
+        else:
+            return {"error": "Failed to generate knowledge report."}
+            
+    except Exception as e:
+        logging.error(f"Error generating user knowledge: {e}")
+        return {"error": f"Failed to generate knowledge report: {str(e)}"}
+
+@app.post("/api/user_knowledge/update")
+async def update_user_knowledge(language: str = Query(...), token: str = Query(...)):
+    """Manually trigger an incremental knowledge update"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Get unanalyzed conversations count
+        unanalyzed = await get_unanalyzed_conversations(user_id, language)
+        
+        if not unanalyzed:
+            return {
+                "updated": True,
+                "message": "Knowledge is already up to date",
+                "conversations_analyzed": 0
+            }
+        
+        # Perform incremental update
+        success = await update_user_knowledge_incrementally(user_id, language)
+        
+        if success:
+            # Return updated knowledge
+            result = supabase.table('user_knowledge').select('knowledge_json').eq('user_id', user_id).eq('language', language).execute()
+            return {
+                "updated": True,
+                "conversations_analyzed": len(unanalyzed),
+                "knowledge": result.data[0]['knowledge_json'] if result.data else None
+            }
+        else:
+            return {
+                "updated": False,
+                "error": "Failed to update knowledge"
+            }
+            
+    except Exception as e:
+        logging.error(f"Error updating user knowledge: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/user_knowledge")
+async def delete_user_knowledge(language: str = Query(...), token: str = Query(...)):
+    """Delete user knowledge data to allow regeneration"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Delete existing knowledge record
+        supabase.table('user_knowledge').delete().eq('user_id', user_id).eq('language', language).execute()
+        
+        return {"deleted": True, "message": "Knowledge data deleted. You can now regenerate it."}
+        
+    except Exception as e:
+        logging.error(f"Error deleting user knowledge: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 class StartLessonConversationRequest(BaseModel):
     lesson_template_id: str
@@ -2213,6 +2389,455 @@ async def use_lesson_suggestion(
     except Exception as e:
         logging.error(f"Error using lesson suggestion: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Lesson Progress API Endpoints
+
+@app.get("/api/lesson_progress/{progress_id}")
+async def get_lesson_progress(progress_id: str, token: str = Query(...)):
+    """Get detailed lesson progress information"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        progress = supabase.table('lesson_progress').select('*').eq('id', progress_id).eq('user_id', user_id).execute()
+        
+        if not progress.data:
+            raise HTTPException(status_code=404, detail="Progress record not found")
+        
+        return progress.data[0]
+        
+    except Exception as e:
+        logging.error(f"Error getting lesson progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/curriculums/{curriculum_id}/progress")
+async def get_curriculum_progress(curriculum_id: str, token: str = Query(...)):
+    """Get progress for all lessons in a curriculum"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Get all progress records for this curriculum
+        progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('curriculum_id', curriculum_id).execute()
+        
+        return progress.data
+        
+    except InvalidTokenError as e:
+        logging.error(f"JWT authentication failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting curriculum progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/curriculums/{curriculum_id}/lessons_with_progress")
+async def get_lessons_with_progress(curriculum_id: str, language: str = Query(...), token: str = Query(...)):
+    """Get all lesson templates with their progress status in one efficient call"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Get all lesson templates for the language
+        lesson_templates = supabase.table('lesson_templates').select('*').eq('language', language).order('order_num', desc=False).execute()
+        
+        # Get all progress records for this curriculum
+        progress_records = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('curriculum_id', curriculum_id).execute()
+        
+        # Create a map of lesson_id to progress
+        progress_map = {str(p['lesson_id']): p for p in progress_records.data if p.get('lesson_id')}
+        
+        # Combine lessons with their progress
+        lessons_with_progress = []
+        for lesson in lesson_templates.data:
+            lesson_data = dict(lesson)
+            lesson_id = str(lesson['id'])
+            
+            if lesson_id in progress_map:
+                lesson_data['progress'] = progress_map[lesson_id]
+            else:
+                lesson_data['progress'] = {
+                    'status': 'not_started',
+                    'turns_completed': 0,
+                    'required_turns': 7
+                }
+            
+            lessons_with_progress.append(lesson_data)
+        
+        return lessons_with_progress
+        
+    except InvalidTokenError as e:
+        logging.error(f"JWT authentication failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting lessons with progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class CompleteLessonRequest(BaseModel):
+    progress_id: str
+
+@app.post("/api/lesson_progress/complete")
+async def complete_lesson(
+    request: CompleteLessonRequest,
+    token: str = Query(...)
+):
+    """Mark a lesson as completed and end the conversation"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Get progress record
+        progress = supabase.table('lesson_progress').select('*').eq('id', request.progress_id).eq('user_id', user_id).execute()
+        
+        if not progress.data:
+            raise HTTPException(status_code=404, detail="Progress record not found")
+        
+        progress_data = progress.data[0]
+        
+        # Check if minimum turns requirement is met
+        if progress_data['turns_completed'] < progress_data['required_turns']:
+            raise HTTPException(status_code=400, detail="Minimum conversation turns not completed")
+        
+        # Get curriculum info to determine language
+        curriculum_id = progress_data['curriculum_id']
+        curriculum = supabase.table('curriculums').select('language').eq('id', curriculum_id).execute()
+        language = curriculum.data[0]['language'] if curriculum.data else 'en'
+        
+        # Update progress to completed
+        completed_progress = supabase.table('lesson_progress').update({
+            'status': 'completed',
+            'completed_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', request.progress_id).execute()
+        
+        # Trigger incremental knowledge update in the background
+        # This will analyze any new conversations since the last update
+        asyncio.create_task(update_user_knowledge_incrementally(user_id, language))
+        
+        return {
+            "completed": True,
+            "progress": completed_progress.data[0] if completed_progress.data else None
+        }
+        
+    except Exception as e:
+        logging.error(f"Error completing lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/lessons/{lesson_id}/progress")
+async def get_lesson_progress_by_lesson(
+    lesson_id: str,
+    curriculum_id: str = Query(...),
+    token: str = Query(...)
+):
+    """Get progress for a specific lesson"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Convert lesson_id to int since lesson_templates uses integer IDs
+        try:
+            lesson_id_int = int(lesson_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid lesson ID format")
+        
+        # Get progress for this lesson
+        progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('lesson_id', lesson_id_int).eq('curriculum_id', curriculum_id).execute()
+        
+        if not progress.data:
+            return {"status": "not_started", "turns_completed": 0, "required_turns": 7}
+        
+        return progress.data[0]
+        
+    except InvalidTokenError as e:
+        logging.error(f"JWT authentication failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting lesson progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/custom_lessons/{custom_lesson_id}/progress")
+async def get_custom_lesson_progress(
+    custom_lesson_id: str,
+    curriculum_id: str = Query(...),
+    token: str = Query(...)
+):
+    """Get progress for a specific custom lesson"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('id').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Get progress for this custom lesson
+        progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('custom_lesson_id', custom_lesson_id).eq('curriculum_id', curriculum_id).execute()
+        
+        if not progress.data:
+            return {"status": "not_started", "turns_completed": 0, "required_turns": 7}
+        
+        return progress.data[0]
+        
+    except Exception as e:
+        logging.error(f"Error getting custom lesson progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Incremental User Knowledge Analysis Functions
+async def get_unanalyzed_conversations(user_id: str, language: str) -> List[str]:
+    """Get conversations that haven't been analyzed for user knowledge yet"""
+    try:
+        # Get the last analysis timestamp
+        last_analysis = supabase.table('user_knowledge').select('updated_at').eq('user_id', user_id).eq('language', language).execute()
+        
+        last_update = None
+        if last_analysis.data:
+            last_update = last_analysis.data[0].get('updated_at')
+        
+        # Get conversations created after the last analysis
+        conversations_query = supabase.table('conversations').select('id, created_at').eq('user_id', user_id).eq('language', language)
+        
+        if last_update:
+            # Only get conversations created after the last knowledge update
+            conversations_query = conversations_query.gt('created_at', last_update)
+        
+        conversations = conversations_query.order('created_at', desc=False).execute()
+        
+        # Extract conversation IDs
+        unanalyzed = [conv['id'] for conv in conversations.data]
+        
+        logging.info(f"[Knowledge Analysis] Found {len(unanalyzed)} unanalyzed conversations for user {user_id} since {last_update or 'beginning'}")
+        return unanalyzed
+        
+    except Exception as e:
+        logging.error(f"Error getting unanalyzed conversations: {e}")
+        return []
+
+async def analyze_conversations_incrementally(user_id: str, language: str, conversation_ids: List[str]) -> Optional[dict]:
+    """Analyze specific conversations and merge with existing knowledge"""
+    try:
+        if not conversation_ids:
+            return None
+        
+        # Get messages from the specified conversations
+        new_messages = []
+        for conv_id in conversation_ids:
+            messages = supabase.table('messages').select('content').eq('conversation_id', conv_id).eq('role', 'user').order('created_at', desc=False).execute()
+            new_messages.extend([m['content'] for m in messages.data])
+        
+        if not new_messages:
+            logging.info(f"[Knowledge Analysis] No new messages found in conversations")
+            return None
+        
+        # Build prompt for new message analysis
+        transcript = "\n".join(new_messages)
+        prompt = f"""Analyze the following new {language} messages from a language learner. Extract vocabulary and grammar patterns they've used.
+
+For each part of speech, provide a list of unique words/patterns the user has demonstrated:
+- nouns: specific nouns they've used
+- pronouns: pronouns they've used correctly
+- adjectives: adjectives they've used
+- verbs: for each verb, list the lemma and what tenses/persons they've used
+- adverbs: adverbs they've used
+- prepositions: prepositions they've used correctly
+- conjunctions: conjunctions they've used
+- articles: articles they've used correctly
+- interjections: interjections they've used
+
+Focus on words they used correctly and contextually appropriately. Don't include obvious mistakes.
+
+Output ONLY a valid JSON object with this structure:
+{{
+  "nouns": ["word1", "word2"],
+  "pronouns": ["word1", "word2"],
+  "adjectives": ["word1", "word2"],
+  "verbs": {{
+    "lemma1": {{
+      "present": ["1st_person", "3rd_person"],
+      "past": ["1st_person"]
+    }}
+  }},
+  "adverbs": ["word1", "word2"],
+  "prepositions": ["word1", "word2"],
+  "conjunctions": ["word1", "word2"],
+  "articles": ["word1", "word2"],
+  "interjections": ["word1", "word2"]
+}}
+
+Messages to analyze:
+{transcript}"""
+
+        # Call OpenAI API
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4-turbo-preview",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 1500
+                }
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logging.error(f"OpenAI API error in knowledge analysis: {error_text}")
+                    return None
+                
+                response_data = await response.json()
+                result = response_data["choices"][0]["message"]["content"]
+        
+        # Parse the result
+        new_knowledge = extract_json_from_response(result)
+        if not new_knowledge:
+            logging.error(f"Failed to parse knowledge analysis result")
+            return None
+        
+        logging.info(f"[Knowledge Analysis] Analyzed {len(new_messages)} new messages")
+        return new_knowledge
+        
+    except Exception as e:
+        logging.error(f"Error in incremental knowledge analysis: {e}")
+        return None
+
+def merge_knowledge_data(existing: dict, new: dict) -> dict:
+    """Merge new knowledge data with existing knowledge"""
+    try:
+        if not existing:
+            return new
+        if not new:
+            return existing
+        
+        merged = {}
+        
+        # Merge simple lists (nouns, pronouns, etc.)
+        simple_lists = ['nouns', 'pronouns', 'adjectives', 'adverbs', 'prepositions', 'conjunctions', 'articles', 'interjections']
+        
+        for category in simple_lists:
+            existing_items = set(existing.get(category, []))
+            new_items = set(new.get(category, []))
+            merged[category] = sorted(list(existing_items | new_items))
+        
+        # Merge verb structures (more complex)
+        merged['verbs'] = dict(existing.get('verbs', {}))
+        new_verbs = new.get('verbs', {})
+        
+        for lemma, tenses in new_verbs.items():
+            if lemma in merged['verbs']:
+                # Merge tenses for existing verb
+                for tense, persons in tenses.items():
+                    if tense in merged['verbs'][lemma]:
+                        # Merge persons for existing tense
+                        existing_persons = set(merged['verbs'][lemma][tense])
+                        new_persons = set(persons)
+                        merged['verbs'][lemma][tense] = sorted(list(existing_persons | new_persons))
+                    else:
+                        # New tense for existing verb
+                        merged['verbs'][lemma][tense] = sorted(persons)
+            else:
+                # New verb
+                merged['verbs'][lemma] = {tense: sorted(persons) for tense, persons in tenses.items()}
+        
+        return merged
+        
+    except Exception as e:
+        logging.error(f"Error merging knowledge data: {e}")
+        return existing or new or {}
+
+async def update_user_knowledge_incrementally(user_id: str, language: str, conversation_ids: List[str] = None) -> bool:
+    """Update user knowledge with new conversation data"""
+    try:
+        # Get conversations to analyze
+        if conversation_ids is None:
+            conversation_ids = await get_unanalyzed_conversations(user_id, language)
+        
+        if not conversation_ids:
+            logging.info(f"[Knowledge Update] No new conversations to analyze for user {user_id}")
+            return True
+        
+        # Analyze new conversations
+        new_knowledge = await analyze_conversations_incrementally(user_id, language, conversation_ids)
+        if not new_knowledge:
+            return False
+        
+        # Get existing knowledge
+        existing_result = supabase.table('user_knowledge').select('*').eq('user_id', user_id).eq('language', language).execute()
+        
+        existing_knowledge = {}
+        
+        if existing_result.data:
+            existing_knowledge = existing_result.data[0].get('knowledge_json', {})
+        
+        # Merge knowledge
+        updated_knowledge = merge_knowledge_data(existing_knowledge, new_knowledge)
+        
+        # Save to database
+        update_data = {
+            'knowledge_json': updated_knowledge,
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        if existing_result.data:
+            # Update existing record
+            supabase.table('user_knowledge').update(update_data).eq('user_id', user_id).eq('language', language).execute()
+        else:
+            # Create new record
+            update_data.update({
+                'user_id': user_id,
+                'language': language
+            })
+            supabase.table('user_knowledge').insert(update_data).execute()
+        
+        logging.info(f"[Knowledge Update] Updated knowledge for user {user_id}, analyzed {len(conversation_ids)} new conversations")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error updating user knowledge incrementally: {e}")
+        return False
+
+def extract_json_from_response(text: str) -> Optional[dict]:
+    """Extract JSON from LLM response text"""
+    import re
+    
+    text = text.strip()
+    if text.startswith('```'):
+        text = re.sub(r'^```[a-zA-Z]*', '', text)
+        text = text.strip('`\n')
+    
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        json_str = match.group(0)
+        try:
+            return json.loads(json_str)
+        except Exception:
+            pass
+    
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,105 +1,129 @@
-# OpenAI Realtime API Demo
+# OpenAI Realtime API Demo - Python/React Language Learning Platform
 
-This is a Python application that demonstrates the use of OpenAI's Realtime API for voice conversations. The application allows for real-time voice interaction with an AI assistant, with features like:
-
-- Real-time voice input and output
-- Conversation history tracking
-- Function calling capabilities
-- Automatic feedback loop prevention
-
-## Setup
-
-1. Create a virtual environment:
-```bash
-python3 -m venv venv
-```
-
-2. Activate the virtual environment:
-```bash
-source venv/bin/activate  # On macOS/Linux
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Create a `.env` file in the project root and add your OpenAI API key:
-```
-OPENAI_API_KEY=your_api_key_here
-```
-
-## Running the Application
-
-1. Make sure your virtual environment is activated
-2. Run the application:
-```bash
-python realtime.py
-```
+This is a language learning platform that uses OpenAI's Realtime API for voice conversations, with automatic feedback generation and progress tracking.
 
 ## Features
 
-- Real-time voice conversation with AI
-- Automatic transcription of both user and AI speech
-- Conversation history tracking
-- Function calling support (weather, notepad)
-- Feedback loop prevention during AI speech
+### Core Features
+- **Real-time Voice Conversations**: Practice speaking with AI tutors using OpenAI's Realtime API
+- **Automatic Feedback**: AI analyzes your messages and provides detailed feedback on grammar, vocabulary, pronunciation, and more
+- **Multi-language Support**: Practice English, Spanish, French, German, Italian, Portuguese, and Kannada
+- **CEFR Level Adaptation**: Conversations adapt to your proficiency level (A1-C2)
+- **Progress Analytics**: Track your learning progress with detailed charts and metrics
 
-## Requirements
+### Curriculum System
+- **Structured Lessons**: Follow pre-designed lesson templates for systematic learning
+- **Context-based Practice**: Practice in different scenarios (restaurant, market, introduction, etc.)
+- **Lesson Templates**: Pre-built lessons with specific objectives and cultural elements
 
-- Python 3.9+
-- PyAudio
-- WebSocket client
-- PySocks
-- OpenAI API key
+### 🆕 Custom Lesson Generation
+**AI-Powered Weakness Targeting**: The platform now automatically identifies your recurring mistakes and generates personalized lessons to target your specific areas of weakness.
 
-- **Initialize Audio Interface**
+#### How it works:
+1. **Weakness Analysis**: The system analyzes all your conversation feedback to identify patterns of mistakes
+2. **Pattern Recognition**: Groups mistakes by category (grammar, vocabulary, etc.) and type (verb tense, ser vs estar, etc.)
+3. **Smart Prioritization**: Focuses on the most frequent and severe mistake patterns
+4. **Custom Lesson Creation**: Uses AI to generate targeted lessons with:
+   - Specific objectives addressing your weaknesses
+   - Tailored content and explanations
+   - Practice activities focused on problem areas
+   - Cultural context relevant to the lessons
 
-  - Use `pyaudio.PyAudio()` to create the `p` audio interface, managing both microphone and speaker audio streams.
+#### Example Use Cases:
+- **Spanish learners**: If you frequently confuse "ser" vs "estar", the system generates a custom lesson specifically about these verbs
+- **German learners**: If you struggle with der/die/das articles, you get a lesson focused on German article usage
+- **General grammar**: If you make consistent verb conjugation errors, you get targeted practice for that specific tense
 
-  **Configure Microphone and Speaker Streams**
+#### Usage:
+1. Practice normal conversations and receive feedback
+2. After accumulating enough conversation data, go to the "Your Progress" section
+3. View your "Weakness Analysis" to see recurring mistake patterns
+4. Click "Generate Custom Lesson" to create a personalized lesson
+5. Start practicing with your custom lesson designed for your specific needs
 
-  - Configure 
+### Technical Features
+- **WebSocket Communication**: Real-time audio streaming
+- **Supabase Backend**: User authentication, data storage, and real-time features
+- **JWT Authentication**: Secure user sessions
+- **React/Next.js Frontend**: Modern, responsive user interface
 
-    ```
-    mic_stream
-    ```
+## API Endpoints
 
-     for microphone input and 
+### Custom Lesson Endpoints
+- `GET /api/analyze_weaknesses?curriculum_id={id}` - Analyze user's mistake patterns
+- `POST /api/generate_custom_lesson` - Generate a custom lesson based on weaknesses
+- `GET /api/custom_lessons?curriculum_id={id}` - List custom lessons
+- `POST /api/start_custom_lesson_conversation` - Start a conversation with a custom lesson
+- `DELETE /api/custom_lessons/{id}` - Delete a custom lesson
 
-    ```
-    speaker_stream
-    ```
+### Other Endpoints
+- `WebSocket /ws` - Real-time conversation handling
+- `POST /api/hint` - Get conversation hints
+- `POST /api/feedback` - Get feedback for messages
+- `GET /api/conversations` - List user conversations
+- `GET /api/curriculums` - Manage learning curriculums
 
-     for speaker output:
+## Setup
 
-    - `mic_stream` uses `mic_callback` to capture audio frames, placing each frame in the `mic_queue` for later transmission over WebSocket.
-    - `speaker_stream` uses `speaker_callback` to retrieve audio data from `audio_buffer` for playback, handling timing and buffering of audio frames.
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   cd frontend && npm install
+   ```
 
-  **Start Audio Streams**
+2. **Environment Variables**:
+   Create a `.env` file with:
+   ```
+   OPENAI_API_KEY=your_openai_api_key
+   SUPABASE_URL=your_supabase_url
+   SUPABASE_SERVICE_KEY=your_supabase_service_key
+   SUPABASE_JWT_SECRET=your_jwt_secret
+   ```
 
-  - Start audio capture and playback by calling `mic_stream.start_stream()` and `speaker_stream.start_stream()`.
+3. **Database Setup**:
+   Run the SQL schema files in your Supabase project:
+   - `schema.sql`
+   - `schema_feedback.sql`
+   - `schema_custom_lessons.sql`
 
-  **Establish WebSocket Connection**
+4. **Run the Application**:
+   ```bash
+   # Start backend
+   python server.py
+   
+   # Start frontend (in another terminal)
+   cd frontend && npm run dev
+   ```
 
-  - The 
+## Architecture
 
-    ```
-    connect_to_openai()
-    ```
+- **Backend**: FastAPI with WebSocket support
+- **Frontend**: Next.js with React
+- **Database**: Supabase (PostgreSQL)
+- **Real-time**: WebSocket for audio streaming
+- **AI**: OpenAI GPT-4 for lesson generation and feedback analysis
 
-     function initiates a WebSocket connection with OpenAI's API for real-time data exchange. This function spawns two threads:
+## Database Schema
 
-    - **Send Microphone Audio**: `send_mic_audio_to_websocket` pulls audio data from `mic_queue`, encodes it in base64, and sends it via WebSocket in the `input_audio_buffer.append` format.
-    - **Receive Audio and Responses**: `receive_audio_from_websocket` listens for WebSocket messages from OpenAI, handling responses based on message `type`.
+### Core Tables
+- `users` - User authentication and profiles
+- `curriculums` - Language learning paths
+- `conversations` - Voice conversation sessions
+- `messages` - Individual messages in conversations
+- `message_feedback` - AI-generated feedback for user messages
 
-  **Handle WebSocket Events and Message Types**
+### Custom Lesson Tables
+- `custom_lesson_templates` - AI-generated personalized lessons
+- `lesson_templates` - Pre-built lesson templates
 
-  - In `receive_audio_from_websocket`, the following message types are processed:
-    - **`session.created`**: Indicates a successful session creation. This triggers `send_fc_session_update()` to configure session parameters, such as transcription and voice activity detection (VAD) settings.
-    - **`input_audio_buffer.speech_started`**: Indicates that the AI has detected speech in the audio input. This triggers:
-      - `clear_audio_buffer()` to remove any existing data in `audio_buffer`.
-      - `stop_audio_playback()` to halt the speaker stream, ensuring only new audio data is played.
-    - **`response.audio.delta`**: Contains audio data in the `delta` field, encoded in base64. This data is decoded and appended to `audio_buffer`, where `speaker_callback` can access it for real-time playback.
-    - **`response.audio.done`**: Marks the end of the AI's audio response, signaling that no further audio data for the current response will be received.
-    - **`response.function_call_arguments.done`**: Indicates the AI's request for a function call. The `handle_function_call` function decodes the request arguments, performs the specified action (such as `
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License.

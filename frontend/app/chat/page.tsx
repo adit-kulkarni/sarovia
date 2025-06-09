@@ -4,9 +4,10 @@ import React, { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
 import ConversationHistory from '../components/ConversationHistory';
-import { Feedback } from '../types/feedback';
+import { Feedback, LessonProgress, LessonProgressEvent } from '../types/feedback';
 import FeedbackPanel from '../components/FeedbackPanel';
 import ChatBubble from '../components/ChatBubble';
+import LessonProgressIndicator from '../components/LessonProgressIndicator';
 import type { Message } from '../types/feedback';
 
 const contextTitles: { [key: string]: string } = {
@@ -49,6 +50,9 @@ function ChatComponent() {
   const [conversationStarted, setConversationStarted] = useState(false);
   const [isMicPrompted, setIsMicPrompted] = useState(false);
   const [customInstructions, setCustomInstructions] = useState<string | null>(null);
+  const [lessonProgress, setLessonProgress] = useState<LessonProgress | null>(null);
+  const [isCompletingLesson, setIsCompletingLesson] = useState(false);
+  const [isLessonConversation, setIsLessonConversation] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -97,10 +101,30 @@ function ChatComponent() {
         const language = searchParams.get('language') || 'en';
         const level = searchParams.get('level') || 'A1';
         const conversationId = searchParams.get('conversation');
+        const lessonId = searchParams.get('lesson_id');
+        const customLessonId = searchParams.get('custom_lesson_id');
 
         setSelectedContext(context);
         setSelectedLanguage(language);
         setSelectedLevel(level);
+        
+        // Check if this is a lesson conversation
+        if (lessonId || customLessonId || context.startsWith('Lesson:') || context.startsWith('Custom Lesson:')) {
+          setIsLessonConversation(true);
+          console.log('[Lesson Detection] This is a lesson conversation:', {
+            lessonId,
+            customLessonId,
+            context,
+            isLessonConversation: true
+          });
+        } else {
+          console.log('[Lesson Detection] This is NOT a lesson conversation:', {
+            lessonId,
+            customLessonId,
+            context,
+            isLessonConversation: false
+          });
+        }
 
         // If we have a conversation ID, load the existing conversation
         if (conversationId) {
@@ -114,8 +138,12 @@ function ChatComponent() {
             .eq('id', conversationId)
             .single();
           if (convoError) throw convoError;
+          
+          console.log('[Conversation Loading] Loaded conversation data:', convoData);
+          
           if (convoData && convoData.context) {
             setSelectedContext(convoData.context);
+            console.log('[Conversation Loading] Set context from DB:', convoData.context);
           }
           if (convoData && convoData.language) {
             setSelectedLanguage(convoData.language);
@@ -181,6 +209,53 @@ function ChatComponent() {
             }
           });
           setMessageFeedbacks(messageFeedbackMap);
+          
+          // If this is a lesson conversation, fetch current progress
+          if (lessonId || customLessonId || convoData?.context?.startsWith('Lesson:') || convoData?.context?.startsWith('Custom Lesson:')) {
+            // Update lesson conversation state if loading from database context
+            if (convoData?.context?.startsWith('Lesson:') || convoData?.context?.startsWith('Custom Lesson:')) {
+              setIsLessonConversation(true);
+              console.log('[Lesson Detection] Updated to lesson conversation from DB context:', convoData.context);
+            }
+            
+            console.log('[Progress Init] Fetching lesson progress for existing conversation');
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session?.access_token) {
+                const curriculumId = searchParams.get('curriculum_id');
+                let progressUrl = '';
+                
+                if (lessonId) {
+                  progressUrl = `${API_BASE}/api/lessons/${lessonId}/progress?curriculum_id=${curriculumId}&token=${session.access_token}`;
+                } else if (customLessonId) {
+                  progressUrl = `${API_BASE}/api/custom_lessons/${customLessonId}/progress?curriculum_id=${curriculumId}&token=${session.access_token}`;
+                }
+                
+                if (progressUrl) {
+                  const progressResponse = await fetch(progressUrl);
+                  if (progressResponse.ok) {
+                    const progressData = await progressResponse.json();
+                    console.log('[Progress Init] Loaded existing progress:', progressData);
+                    
+                    if (progressData && progressData.status !== 'not_started') {
+                      const lessonProgressData: LessonProgress = {
+                        turns: progressData.turns_completed || 0,
+                        required: progressData.required_turns || 7,
+                        can_complete: (progressData.turns_completed || 0) >= (progressData.required_turns || 7),
+                        lesson_id: lessonId || undefined,
+                        custom_lesson_id: customLessonId || undefined,
+                        progress_id: progressData.id
+                      };
+                      setLessonProgress(lessonProgressData);
+                      console.log('[Progress Init] Set lesson progress:', lessonProgressData);
+                    }
+                  }
+                }
+              }
+            } catch (progressError) {
+              console.error('[Progress Init] Error loading lesson progress:', progressError);
+            }
+          }
         }
 
         setIsLoading(false);
@@ -466,6 +541,30 @@ function ChatComponent() {
                 console.error('Error processing audio data:', error);
               }
               break;
+            case 'lesson.progress':
+              // Handle lesson progress updates
+              const progressData: LessonProgress = {
+                turns: data.turns,
+                required: data.required,
+                can_complete: data.can_complete,
+                lesson_id: data.lesson_id,
+                custom_lesson_id: data.custom_lesson_id,
+                progress_id: data.progress_id
+              };
+              setLessonProgress(progressData);
+              console.log('Lesson progress updated:', progressData);
+              
+              // Additional debugging
+              console.log(`[Progress Debug] Turns: ${data.turns}/${data.required}, Can complete: ${data.can_complete}`);
+              console.log(`[Progress Debug] Lesson ID: ${data.lesson_id}, Custom Lesson ID: ${data.custom_lesson_id}`);
+              console.log(`[Progress Debug] Progress ID: ${data.progress_id}`);
+              
+              // Show notification when lesson can be completed
+              if (data.can_complete && !lessonProgress?.can_complete) {
+                console.log('[Progress Debug] Lesson completion unlocked!');
+                // You could add a toast notification here if desired
+              }
+              break;
             case 'suggestion.available':
               // Emit custom event for lesson suggestions
               const suggestionEvent = new CustomEvent('suggestion.available', {
@@ -656,6 +755,72 @@ function ChatComponent() {
     }
   };
 
+  const handleCompleteLesson = async () => {
+    if (!lessonProgress?.progress_id || !lessonProgress.can_complete) {
+      return;
+    }
+
+    setIsCompletingLesson(true);
+    
+    try {
+      // Stop recording if currently recording
+      if (isRecording) {
+        console.log('[Complete Lesson] Stopping recording...');
+        stopRecording();
+      }
+      
+      // Stop any audio playback
+      stopAudioPlayback();
+      
+      // Close WebSocket connection to OpenAI
+      if (wsRef.current) {
+        console.log('[Complete Lesson] Closing WebSocket connection...');
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const response = await fetch(`${API_BASE}/api/lesson_progress/complete?token=${session.access_token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          progress_id: lessonProgress.progress_id
+        })
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        throw new Error(responseData.detail || 'Failed to complete lesson');
+      }
+
+      console.log('[Complete Lesson] Lesson completed successfully:', responseData);
+      
+      // Redirect back to curriculum or lesson list
+      const curriculumId = searchParams.get('curriculum_id');
+      if (curriculumId) {
+        router.push(`/?curriculum_id=${curriculumId}`);
+      } else {
+        router.push('/');
+      }
+      
+    } catch (error) {
+      console.error('[Complete Lesson] Error completing lesson:', error);
+      setError(error instanceof Error ? error.message : 'Failed to complete lesson');
+    } finally {
+      setIsCompletingLesson(false);
+    }
+  };
+
   // UI rendering logic
   if (!conversationStarted) {
     return (
@@ -711,12 +876,46 @@ function ChatComponent() {
               <span className="text-xs text-gray-500 uppercase tracking-wide">Level</span>
               <span className="font-semibold text-base text-gray-800">{selectedLevel}</span>
             </div>
+            {isLessonConversation && (
+              <div className="flex flex-col items-start">
+                <span className="text-xs text-orange-500 uppercase tracking-wide font-medium">Lesson Mode</span>
+                <span className="text-sm text-orange-600 font-medium">Progress Tracked</span>
+              </div>
+            )}
           </div>
-          <div className="flex items-center space-x-2">
-            <span className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-            <span className="text-sm text-gray-600">
-              {isConnected ? 'Connected' : 'Disconnected'}
-            </span>
+          <div className="flex items-center space-x-4">
+            {/* Lesson Progress in Header - More Prominent */}
+            {isLessonConversation && lessonProgress && (
+              <div className="flex items-center space-x-3 bg-orange-50 rounded-lg px-4 py-2 border border-orange-200">
+                <div className="flex flex-col items-start">
+                  <span className="text-xs text-orange-600 uppercase tracking-wide font-medium">Progress</span>
+                  <span className="text-sm font-semibold text-orange-800">
+                    {lessonProgress.turns}/{lessonProgress.required} turns
+                  </span>
+                </div>
+                <div className="w-24 bg-orange-200 rounded-full h-2">
+                  <div 
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      lessonProgress.can_complete 
+                        ? 'bg-green-500' 
+                        : 'bg-orange-500'
+                    }`}
+                    style={{ width: `${Math.min((lessonProgress.turns / lessonProgress.required) * 100, 100)}%` }}
+                  />
+                </div>
+                {lessonProgress.can_complete && (
+                  <div className="flex items-center">
+                    <span className="text-green-600 text-lg">✅</span>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex items-center space-x-2">
+              <span className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+              <span className="text-sm text-gray-600">
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -744,6 +943,15 @@ function ChatComponent() {
 
         {/* Right Panel */}
         <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 flex flex-col">
+          {/* Lesson Progress Section - Only show for lesson conversations */}
+          {isLessonConversation && lessonProgress && (
+            <div className="flex-none p-4 border-b border-orange-100">
+              <LessonProgressIndicator
+                progress={lessonProgress}
+              />
+            </div>
+          )}
+          
           {/* Hints Section */}
           <div className="flex-none p-4 border-b border-orange-100">
             <div className="flex justify-between items-center mb-4">
@@ -791,7 +999,7 @@ function ChatComponent() {
 
       {/* Controls */}
       <div className="bg-white/80 backdrop-blur-sm border-t border-orange-100 p-4">
-        <div className="max-w-6xl mx-auto flex justify-center">
+        <div className="max-w-6xl mx-auto flex justify-center items-center space-x-4">
           {!isRecording ? (
             <button
               onClick={handleStartRecording}
@@ -805,6 +1013,27 @@ function ChatComponent() {
               className="px-8 py-3 rounded-full text-white font-medium bg-orange-400 hover:bg-orange-500 transition-colors"
             >
               Stop Recording
+            </button>
+          )}
+          
+          {/* Lesson Completion Button - Only show when lesson can be completed */}
+          {isLessonConversation && lessonProgress?.can_complete && (
+            <button
+              onClick={handleCompleteLesson}
+              disabled={isCompletingLesson}
+              className="px-8 py-3 rounded-full bg-green-500 hover:bg-green-600 text-white font-medium transition-colors disabled:opacity-50 border-2 border-green-400"
+            >
+              {isCompletingLesson ? (
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
+                  Completing...
+                </div>
+              ) : (
+                <div className="flex items-center">
+                  <span className="mr-2">✅</span>
+                  Complete Lesson
+                </div>
+              )}
             </button>
           )}
         </div>

@@ -55,6 +55,11 @@ interface LessonTemplatePreview {
   objectives?: string;
   level?: string;
   difficulty?: string;
+  progress?: {
+    status: 'not_started' | 'in_progress' | 'completed';
+    turns_completed: number;
+    required_turns: number;
+  };
 }
 
 interface Mistake {
@@ -166,6 +171,7 @@ const Dashboard = () => {
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [showContextModal, setShowContextModal] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
+  const [lessonProgress, setLessonProgress] = useState<Record<string, any>>({});
   const router = useRouter();
 
   const user = useUser();
@@ -215,7 +221,7 @@ const Dashboard = () => {
   }, [selectedCurriculum, token]);
 
   async function fetchLessons(curriculumId: string) {
-    setLoading(true);
+    // Don't show loading for lessons since it's quick
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/curriculums/${curriculumId}/lessons?token=${token}`);
@@ -224,25 +230,42 @@ const Dashboard = () => {
       setLessons(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
     }
   }
 
   // Fetch lesson templates for selected curriculum's language
   useEffect(() => {
     async function fetchLessonTemplates(language: string) {
-      setLoading(true);
+      // Only show loading state while fetching lesson templates, not other data
       setError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/lesson_templates?language=${language}`);
-        if (!res.ok) throw new Error('Failed to fetch lesson templates');
-        const data: LessonTemplatePreview[] = await res.json();
-        setLessonTemplates(data);
+        if (selectedCurriculum && token) {
+          // Use the efficient batch endpoint that gets lessons with progress in one call
+          const res = await fetch(
+            `${API_BASE}/api/curriculums/${selectedCurriculum.id}/lessons_with_progress?language=${language}&token=${token}`
+          );
+          if (!res.ok) throw new Error('Failed to fetch lessons with progress');
+          const data: LessonTemplatePreview[] = await res.json();
+          
+          // Create progress map for state
+          const progressMap: Record<string, any> = {};
+          data.forEach(lesson => {
+            if (lesson.progress) {
+              progressMap[lesson.id] = lesson.progress;
+            }
+          });
+          
+          setLessonProgress(progressMap);
+          setLessonTemplates(data);
+        } else {
+          // Fallback to basic lesson templates without progress
+          const res = await fetch(`${API_BASE}/api/lesson_templates?language=${language}`);
+          if (!res.ok) throw new Error('Failed to fetch lesson templates');
+          const data: LessonTemplatePreview[] = await res.json();
+          setLessonTemplates(data);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setLoading(false);
       }
     }
     if (selectedCurriculum) {
@@ -250,7 +273,7 @@ const Dashboard = () => {
     } else {
       setLessonTemplates([]);
     }
-  }, [selectedCurriculum]);
+  }, [selectedCurriculum?.id, selectedCurriculum?.language, token]);
 
   const handleCurriculumChange = (id: string) => {
     const found = curriculums.find(c => c.id === id);
@@ -420,38 +443,85 @@ const Dashboard = () => {
         </h2>
         <div className="px-10">
           <div className="flex space-x-6 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
-            {lessonTemplates.slice(0, 15).map(lesson => (
-              <div
-                key={lesson.id}
-                className="flex flex-col justify-between min-w-[320px] max-w-[340px] bg-white rounded-2xl shadow-lg border border-gray-100 p-0 overflow-hidden"
-                style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
-              >
-                {/* Top: Level & Difficulty */}
-                <div className="px-5 pt-4 pb-1">
-                  <div className="text-xs text-gray-500 font-semibold mb-1">
-                    Level: {lesson.level || 'N/A'} &bull; Difficulty: {lesson.difficulty || 'N/A'}
+            {lessonTemplates.slice(0, 15).map(lesson => {
+              const progress = lesson.progress;
+              const isCompleted = progress?.status === 'completed';
+              const isInProgress = progress?.status === 'in_progress';
+              const progressPercentage = progress ? Math.min((progress.turns_completed / progress.required_turns) * 100, 100) : 0;
+              
+              return (
+                <div
+                  key={lesson.id}
+                  className={`flex flex-col justify-between min-w-[320px] max-w-[340px] bg-white rounded-2xl shadow-lg border p-0 overflow-hidden ${
+                    isCompleted ? 'border-green-200' : isInProgress ? 'border-orange-200' : 'border-gray-100'
+                  }`}
+                  style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
+                >
+                  {/* Progress Status Badge */}
+                  {progress && (
+                    <div className="px-5 pt-3">
+                      <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        isCompleted 
+                          ? 'bg-green-100 text-green-800' 
+                          : isInProgress 
+                            ? 'bg-orange-100 text-orange-800' 
+                            : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {isCompleted ? '✅ Completed' : isInProgress ? '🔄 In Progress' : '⭕ Not Started'}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Top: Level & Difficulty */}
+                  <div className="px-5 pt-4 pb-1">
+                    <div className="text-xs text-gray-500 font-semibold mb-1">
+                      Level: {lesson.level || 'N/A'} &bull; Difficulty: {lesson.difficulty || 'N/A'}
+                    </div>
+                    {/* Title */}
+                    <div className="text-xl font-bold text-gray-900 mb-2">
+                      {lesson.title}
+                    </div>
                   </div>
-                  {/* Title */}
-                  <div className="text-xl font-bold text-gray-900 mb-2">
-                    {lesson.title}
+                  
+                  {/* Progress Bar (if in progress) */}
+                  {progress && isInProgress && (
+                    <div className="px-5 pb-2">
+                      <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
+                        <div 
+                          className="bg-orange-500 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${progressPercentage}%` }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {progress.turns_completed}/{progress.required_turns} conversation turns
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Description */}
+                  <div className="px-5 pb-4 text-sm text-gray-700 flex-1">
+                    {lesson.objectives || <span className="italic text-gray-400">No description</span>}
+                  </div>
+                  
+                  {/* Bottom: Start Lesson Button */}
+                  <div className="px-5 h-16 flex items-center justify-end border-t border-gray-100 bg-gray-50">
+                    <button
+                      className={`px-5 py-2 mx-2 rounded-lg font-semibold shadow transition-colors text-sm ${
+                        isCompleted 
+                          ? 'bg-green-500 hover:bg-green-600 text-white' 
+                          : isInProgress 
+                            ? 'bg-orange-500 hover:bg-orange-600 text-white' 
+                            : 'bg-orange-500 hover:bg-orange-600 text-white'
+                      }`}
+                      onClick={() => handleStartLesson(lesson.id)}
+                    >
+                      {isCompleted ? 'Review Lesson' : isInProgress ? 'Continue Lesson' : 'Start Lesson'}
+                    </button>
                   </div>
                 </div>
-                {/* Description */}
-                <div className="px-5 pb-4 text-sm text-gray-700 flex-1">
-                  {lesson.objectives || <span className="italic text-gray-400">No description</span>}
-            </div>
-                {/* Bottom: Start Lesson Button */}
-                <div className="px-5 h-16 flex items-center justify-end border-t border-gray-100 bg-gray-50">
-                  <button
-                    className="px-5 py-2 mx-2 rounded-lg bg-orange-500 text-white font-semibold shadow hover:bg-orange-600 transition-colors text-sm"
-                    onClick={() => handleStartLesson(lesson.id)}
-                  >
-                    Start Lesson
-                  </button>
-                </div>
-              </div>
-            ))}
-            {lessonTemplates.length === 0 && !loading && (
+                             );
+             })}
+              {lessonTemplates.length === 0 && !loading && (
               <div className="text-gray-400">No lessons found for this curriculum.</div>
             )}
           </div>

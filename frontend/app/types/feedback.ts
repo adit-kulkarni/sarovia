@@ -51,4 +51,24 @@ export interface Message {
   timestamp: string;
   isStreaming?: boolean;
   feedback?: Feedback; // Optional feedback info
+}
+
+// Lesson progress types
+export interface LessonProgress {
+  turns: number;
+  required: number;
+  can_complete: boolean;
+  lesson_id?: string;
+  custom_lesson_id?: string;
+  progress_id?: string;
+}
+
+export interface LessonProgressEvent {
+  type: 'lesson.progress';
+  turns: number;
+  required: number;
+  can_complete: boolean;
+  lesson_id?: string;
+  custom_lesson_id?: string;
+  progress_id?: string;
 } 
