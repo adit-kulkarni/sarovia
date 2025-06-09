@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
 import ConversationHistory from '../components/ConversationHistory';
@@ -30,7 +30,7 @@ const languageNames: { [key: string]: string } = {
 
 const API_BASE = 'http://localhost:8000';
 
-export default function Chat() {
+function ChatComponent() {
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -466,6 +466,17 @@ export default function Chat() {
                 console.error('Error processing audio data:', error);
               }
               break;
+            case 'suggestion.available':
+              // Emit custom event for lesson suggestions
+              const suggestionEvent = new CustomEvent('suggestion.available', {
+                detail: {
+                  curriculum_id: data.curriculum_id,
+                  threshold_data: data.threshold_data
+                }
+              });
+              window.dispatchEvent(suggestionEvent);
+              console.log('Suggestion notification dispatched:', data);
+              break;
             case 'error':
               setError(data.error.message);
               break;
@@ -806,5 +817,13 @@ export default function Chat() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function Chat() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <ChatComponent />
+    </Suspense>
   );
 } 

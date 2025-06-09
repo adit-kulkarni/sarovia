@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import aiohttp
 from fastapi.responses import JSONResponse
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -353,6 +354,29 @@ async def process_feedback_background(message_id: str, language: str, level: str
             "hasMistakes": len(feedback.mistakes) > 0
         })
         logging.info(f"[Background] Feedback sent to client for message_id={message_id}, hasMistakes={len(feedback.mistakes) > 0}")
+        
+        # Check if suggestion threshold is met after feedback generation
+        if len(feedback.mistakes) > 0:  # Only check if there were mistakes
+            try:
+                # Get user_id from the conversation
+                user_result = supabase.table('conversations').select('user_id, curriculum_id').eq('id', conversation['id']).execute()
+                if user_result.data:
+                    user_data = user_result.data[0]
+                    user_id = user_data['user_id']
+                    curriculum_id = user_data['curriculum_id']
+                    
+                    # Check suggestion threshold
+                    threshold_check = await check_lesson_suggestion_threshold(user_id, curriculum_id)
+                    if threshold_check["needs_suggestion"]:
+                        # Send suggestion notification to client
+                        await client_ws.send_json({
+                            "type": "suggestion.available",
+                            "curriculum_id": curriculum_id,
+                            "threshold_data": threshold_check
+                        })
+                        logging.info(f"[Background] Suggestion threshold met for user {user_id}, curriculum {curriculum_id}")
+            except Exception as suggestion_error:
+                logging.error(f"[Background] Error checking suggestion threshold: {suggestion_error}")
         
     except Exception as e:
         logging.error(f"[Background] Error generating feedback: {e}")
@@ -1384,6 +1408,22 @@ async def generate_custom_lesson(request: CustomLessonRequest, token: str = Quer
 async def generate_lesson_with_openai(patterns: List[dict], language: str, level: str) -> dict:
     """Use OpenAI to generate a custom lesson targeting specific weaknesses."""
     
+    # Check if we should use mock mode (when OpenAI quota is exceeded)
+    MOCK_MODE = os.getenv("MOCK_LESSON_GENERATION", "false").lower() == "true"
+    
+    if MOCK_MODE:
+        # Return a mock lesson for testing
+        pattern = patterns[0] if patterns else {"category": "grammar", "type": "verb tense", "frequency": 3}
+        return {
+            "title": f"Mastering {pattern['category'].title()}: {pattern['type'].title()}",
+            "difficulty": level,
+            "objectives": f"Practice {pattern['type']} usage and improve accuracy in {language} conversations",
+            "content": f"Learn the correct usage of {pattern['type']} in {language} with practical examples and exercises",
+            "cultural_element": f"Understand how {pattern['type']} is used in everyday {language} conversations",
+            "practice_activity": f"Complete exercises focusing on {pattern['type']} and practice in conversation",
+            "targeted_weaknesses": [f"{pattern['category']}", f"{pattern['type']}"]
+        }
+    
     # Build context about the weaknesses
     weakness_context = []
     for pattern in patterns[:5]:  # Focus on top 5 patterns
@@ -1436,7 +1476,11 @@ Keep all text concise and focused. Use {language} only for examples within the E
             }
         ) as response:
             if response.status != 200:
-                raise Exception(f"OpenAI API error: {await response.text()}")
+                error_text = await response.text()
+                # Check if it's a quota error
+                if "insufficient_quota" in error_text or "quota" in error_text.lower():
+                    raise Exception(f"OpenAI API quota exceeded. Please add credits to your OpenAI account or set MOCK_LESSON_GENERATION=true for testing.")
+                raise Exception(f"OpenAI API error: {error_text}")
             
             response_data = await response.json()
             lesson_data = json.loads(response_data["choices"][0]["message"]["content"])
@@ -1598,6 +1642,576 @@ async def save_custom_lesson(
         
     except Exception as e:
         logging.error(f"Error saving custom lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# New lesson suggestion system endpoints
+
+async def auto_generate_daily_suggestions(user_id: str, curriculum_id: str, threshold_check: dict) -> dict:
+    """Auto-generate daily suggestions without counting against daily limit."""
+    try:
+        # Get curriculum data
+        curriculum = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise Exception("Curriculum not found")
+        
+        curriculum_data = curriculum.data[0]
+        language = curriculum_data['language']
+        level = curriculum_data['start_level']
+        
+        patterns = threshold_check["patterns"]
+        if not patterns:
+            raise Exception("No weakness patterns found")
+        
+        # Generate up to 3 lessons (one for each top pattern)
+        generated_lessons = []
+        for i, pattern in enumerate(patterns[:3]):
+            try:
+                lesson = await generate_lesson_with_openai([pattern], language, level)
+                lesson['pattern_focus'] = f"{pattern['category']} - {pattern['type']}"
+                lesson['pattern_frequency'] = pattern['frequency']
+                generated_lessons.append(lesson)
+            except Exception as e:
+                logging.error(f"Error generating auto lesson {i+1}: {e}")
+                continue
+        
+        if not generated_lessons:
+            raise Exception("Failed to generate any lessons")
+        
+        # Save suggestions to database (mark as auto-generated)
+        suggestion_data = {
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'suggestion_data': threshold_check,
+            'generated_lessons': generated_lessons,
+            'status': 'pending',
+            'suggestions_count': len(generated_lessons)
+        }
+        
+        saved_suggestion = supabase.table('lesson_suggestions').insert(suggestion_data).execute()
+        
+        return {
+            "suggestion_id": saved_suggestion.data[0]['id'],
+            "lessons": generated_lessons,
+            "patterns_analyzed": len(patterns)
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in auto_generate_daily_suggestions: {e}")
+        raise
+
+async def check_lesson_suggestion_threshold(user_id: str, curriculum_id: str) -> dict:
+    """Check if user meets threshold for lesson suggestions based on recent mistakes."""
+    try:
+        # Get last 10 conversations for this curriculum
+        conversations = supabase.table('conversations').select('id').eq('user_id', user_id).eq('curriculum_id', curriculum_id).order('created_at', desc=True).limit(10).execute()
+        conversation_ids = [c['id'] for c in conversations.data]
+        
+        if not conversation_ids:
+            return {"needs_suggestion": False, "reason": "No conversations found"}
+        
+        # Get all user messages from these conversations
+        all_mistakes = []
+        for conv_id in conversation_ids:
+            messages = supabase.table('messages').select('id').eq('conversation_id', conv_id).eq('role', 'user').execute()
+            message_ids = [m['id'] for m in messages.data]
+            
+            for msg_id in message_ids:
+                feedback = supabase.table('message_feedback').select('mistakes').eq('message_id', msg_id).execute()
+                for fb in feedback.data:
+                    all_mistakes.extend(fb['mistakes'])
+        
+        if not all_mistakes:
+            # Check if we're in mock mode for testing
+            MOCK_MODE = os.getenv("MOCK_LESSON_GENERATION", "false").lower() == "true"
+            if MOCK_MODE:
+                # Create fake patterns for testing
+                fake_patterns = [{
+                    'category': 'grammar',
+                    'type': 'verb tense',
+                    'frequency': 5,
+                    'severity_distribution': {'minor': 2, 'moderate': 3, 'critical': 0},
+                    'examples': [
+                        {'error': 'I go yesterday', 'correction': 'I went yesterday', 'explanation': 'Past tense needed'}
+                    ],
+                    'language_feature_tags': ['past_tense']
+                }]
+                return {
+                    "needs_suggestion": True,
+                    "reason": "Mock mode: fake threshold met",
+                    "patterns": fake_patterns,
+                    "severity_counts": {"minor": 2, "moderate": 3, "critical": 0}
+                }
+            return {"needs_suggestion": False, "reason": "No mistakes found"}
+        
+        # Count mistakes by severity
+        severity_counts = {"minor": 0, "moderate": 0, "critical": 0}
+        for mistake in all_mistakes:
+            severity = mistake.get('severity', 'minor')
+            severity_counts[severity] += 1
+        
+        # Check thresholds: 3+ moderate OR 2+ critical OR 5+ minor
+        needs_suggestion = (
+            severity_counts["moderate"] >= 3 or
+            severity_counts["critical"] >= 2 or
+            severity_counts["minor"] >= 5
+        )
+        
+        if needs_suggestion:
+            # Analyze patterns for suggestion
+            patterns = analyze_mistake_patterns(all_mistakes, 'en')  # Will be improved with actual language
+            return {
+                "needs_suggestion": True,
+                "reason": f"Threshold met: {severity_counts}",
+                "patterns": patterns[:3],  # Top 3 patterns for suggestions
+                "severity_counts": severity_counts
+            }
+        else:
+            return {
+                "needs_suggestion": False,
+                "reason": f"Threshold not met: {severity_counts}",
+                "severity_counts": severity_counts
+            }
+            
+    except Exception as e:
+        logging.error(f"Error checking suggestion threshold: {e}")
+        return {"needs_suggestion": False, "reason": f"Error: {str(e)}"}
+
+@app.get("/api/lesson_suggestions/check")
+async def check_lesson_suggestions(
+    curriculum_id: str, 
+    auto_generate: bool = Query(default=False),
+    token: str = Query(...)
+):
+    """Check if user has pending lesson suggestions or meets threshold for new ones."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Check for existing suggestions from today (pending or seen)
+        today = datetime.now().date().isoformat()
+        existing_suggestions = supabase.table('lesson_suggestions').select('*').eq('user_id', user_id).eq('curriculum_id', curriculum_id).in_('status', ['pending', 'seen']).gte('created_at', f'{today}T00:00:00').execute()
+        
+        if existing_suggestions.data:
+            # Count total lessons across all suggestion records
+            total_lesson_count = 0
+            has_unseen = False
+            for suggestion in existing_suggestions.data:
+                generated_lessons = suggestion.get('generated_lessons', [])
+                total_lesson_count += len(generated_lessons)
+                if suggestion.get('status') == 'pending':
+                    has_unseen = True
+            
+            return {
+                "has_suggestions": True,
+                "suggestion_count": total_lesson_count,
+                "type": "existing",
+                "suggestions": existing_suggestions.data,
+                "from_today": True,
+                "is_unseen": has_unseen
+            }
+        
+        # Check if user meets threshold for new suggestions
+        threshold_check = await check_lesson_suggestion_threshold(user_id, curriculum_id)
+        
+        if threshold_check["needs_suggestion"]:
+            if auto_generate:
+                # Auto-generate suggestions for daily check
+                try:
+                    suggestions = await auto_generate_daily_suggestions(user_id, curriculum_id, threshold_check)
+                    return {
+                        "has_suggestions": True,
+                        "suggestion_count": len(suggestions.get("lessons", [])),
+                        "type": "auto_generated",
+                        "suggestions": [suggestions],
+                        "from_today": True
+                    }
+                except Exception as e:
+                    logging.error(f"Error auto-generating suggestions: {e}")
+                    # Fall back to threshold_met response
+                    pass
+            
+            return {
+                "has_suggestions": True,
+                "suggestion_count": 0,  # Will be generated manually
+                "type": "threshold_met",
+                "threshold_data": threshold_check
+            }
+        
+        return {
+            "has_suggestions": False,
+            "suggestion_count": 0,
+            "type": "none",
+            "threshold_data": threshold_check
+        }
+        
+    except Exception as e:
+        logging.error(f"Error checking lesson suggestions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/lesson_suggestions/generate")
+async def generate_lesson_suggestions(
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Generate up to 3 lesson suggestions based on user's mistake patterns."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        curriculum_id = request.get('curriculum_id')
+        
+        if not curriculum_id:
+            raise HTTPException(status_code=400, detail="curriculum_id is required")
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        curriculum_data = curriculum.data[0]
+        language = curriculum_data['language']
+        level = curriculum_data['start_level']
+        
+        # Check daily limit
+        today = datetime.now().date().isoformat()  # Convert to string
+        limit_check = supabase.table('user_suggestion_limits').select('*').eq('user_id', user_id).eq('date', today).execute()
+        
+        current_count = 0
+        if limit_check.data:
+            current_count = limit_check.data[0]['suggestions_generated']
+        
+        if current_count >= 3:
+            raise HTTPException(status_code=429, detail="Daily suggestion limit reached (3 per day)")
+        
+        # Get weakness patterns
+        threshold_check = await check_lesson_suggestion_threshold(user_id, curriculum_id)
+        
+        if not threshold_check["needs_suggestion"]:
+            raise HTTPException(status_code=400, detail="Threshold not met for suggestions")
+        
+        patterns = threshold_check["patterns"]
+        if not patterns:
+            raise HTTPException(status_code=400, detail="No weakness patterns found")
+        
+        # Generate up to 3 lessons (one for each top pattern)
+        generated_lessons = []
+        for i, pattern in enumerate(patterns[:3]):
+            try:
+                lesson = await generate_lesson_with_openai([pattern], language, level)
+                lesson['pattern_focus'] = f"{pattern['category']} - {pattern['type']}"
+                lesson['pattern_frequency'] = pattern['frequency']
+                generated_lessons.append(lesson)
+            except Exception as e:
+                logging.error(f"Error generating lesson {i+1}: {e}")
+                continue
+        
+        if not generated_lessons:
+            raise HTTPException(status_code=500, detail="Failed to generate any lessons")
+        
+        # Save suggestions to database
+        suggestion_data = {
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'suggestion_data': threshold_check,
+            'generated_lessons': generated_lessons,
+            'status': 'pending',
+            'suggestions_count': len(generated_lessons)
+        }
+        
+        saved_suggestion = supabase.table('lesson_suggestions').insert(suggestion_data).execute()
+        
+        # Update daily limit
+        if limit_check.data:
+            supabase.table('user_suggestion_limits').update({
+                'suggestions_generated': current_count + 1
+            }).eq('user_id', user_id).eq('date', today).execute()
+        else:
+            supabase.table('user_suggestion_limits').insert({
+                'user_id': user_id,
+                'date': today,
+                'suggestions_generated': 1
+            }).execute()
+        
+        return {
+            "suggestion_id": saved_suggestion.data[0]['id'],
+            "lessons": generated_lessons,
+            "patterns_analyzed": len(patterns),
+            "daily_count": current_count + 1
+        }
+        
+    except Exception as e:
+        logging.error(f"Error generating lesson suggestions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/lesson_suggestions/refresh")
+async def refresh_lesson_suggestions(
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Force refresh/regenerate lesson suggestions for today."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        curriculum_id = request.get('curriculum_id')
+        
+        if not curriculum_id:
+            raise HTTPException(status_code=400, detail="curriculum_id is required")
+        
+        # Verify curriculum ownership
+        curriculum = supabase.table('curriculums').select('*').eq('id', curriculum_id).eq('user_id', user_id).execute()
+        if not curriculum.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        # Check daily limit (refreshes count against the limit)
+        today = datetime.now().date().isoformat()
+        limit_check = supabase.table('user_suggestion_limits').select('*').eq('user_id', user_id).eq('date', today).execute()
+        
+        current_count = 0
+        if limit_check.data:
+            current_count = limit_check.data[0]['suggestions_generated']
+        
+        if current_count >= 3:
+            raise HTTPException(status_code=429, detail="Daily suggestion limit reached (3 per day)")
+        
+        # Mark any existing suggestions from today as refreshed first
+        today_suggestions = supabase.table('lesson_suggestions').select('id').eq('user_id', user_id).eq('curriculum_id', curriculum_id).in_('status', ['pending', 'seen']).gte('created_at', f'{today}T00:00:00').execute()
+        
+        for suggestion in today_suggestions.data:
+            supabase.table('lesson_suggestions').update({
+                'status': 'refreshed',
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', suggestion['id']).execute()
+        
+        # Get weakness patterns
+        threshold_check = await check_lesson_suggestion_threshold(user_id, curriculum_id)
+        
+        if not threshold_check["needs_suggestion"]:
+            return {
+                "refreshed": True,
+                "has_suggestions": False,
+                "message": "No suggestions needed based on current mistake patterns"
+            }
+        
+        patterns = threshold_check["patterns"]
+        if not patterns:
+            return {
+                "refreshed": True,
+                "has_suggestions": False,
+                "message": "No weakness patterns found to target"
+            }
+        
+        # Generate new suggestions using the same logic as manual generation
+        curriculum_data = curriculum.data[0]
+        language = curriculum_data['language']
+        level = curriculum_data['start_level']
+        
+        generated_lessons = []
+        for i, pattern in enumerate(patterns[:3]):
+            try:
+                lesson = await generate_lesson_with_openai([pattern], language, level)
+                lesson['pattern_focus'] = f"{pattern['category']} - {pattern['type']}"
+                lesson['pattern_frequency'] = pattern['frequency']
+                generated_lessons.append(lesson)
+            except Exception as e:
+                logging.error(f"Error generating refresh lesson {i+1}: {e}")
+                continue
+        
+        if not generated_lessons:
+            raise HTTPException(status_code=500, detail="Failed to generate any lessons")
+        
+        # Save new suggestions to database
+        suggestion_data = {
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'suggestion_data': threshold_check,
+            'generated_lessons': generated_lessons,
+            'status': 'pending',
+            'suggestions_count': len(generated_lessons)
+        }
+        
+        saved_suggestion = supabase.table('lesson_suggestions').insert(suggestion_data).execute()
+        
+        # Update daily limit
+        if limit_check.data:
+            supabase.table('user_suggestion_limits').update({
+                'suggestions_generated': current_count + 1
+            }).eq('user_id', user_id).eq('date', today).execute()
+        else:
+            supabase.table('user_suggestion_limits').insert({
+                'user_id': user_id,
+                'date': today,
+                'suggestions_generated': 1
+            }).execute()
+        
+        return {
+            "refreshed": True,
+            "has_suggestions": True,
+            "suggestion_id": saved_suggestion.data[0]['id'],
+            "lessons": generated_lessons,
+            "suggestion_count": len(generated_lessons),
+            "daily_count": current_count + 1
+        }
+        
+    except Exception as e:
+        logging.error(f"Error refreshing lesson suggestions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/lesson_suggestions/{suggestion_id}/mark_seen")
+async def mark_suggestion_as_seen(suggestion_id: str, token: str = Query(...)):
+    """Mark a lesson suggestion as seen (changes notification from red to grey)."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Update suggestion status to seen
+        result = supabase.table('lesson_suggestions').update({
+            'status': 'seen',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', suggestion_id).eq('user_id', user_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        
+        return {"marked_seen": True}
+        
+    except Exception as e:
+        logging.error(f"Error marking suggestion as seen: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/lesson_suggestions/{suggestion_id}/dismiss")
+async def dismiss_lesson_suggestion(
+    suggestion_id: str, 
+    request: dict = Body(default={}),
+    token: str = Query(...)
+):
+    """Mark a lesson suggestion or individual lesson as dismissed."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        lesson_index = request.get('lesson_index')  # Optional: dismiss specific lesson
+        
+        if lesson_index is not None:
+            # Dismiss individual lesson - remove it from the generated_lessons array
+            suggestion = supabase.table('lesson_suggestions').select('*').eq('id', suggestion_id).eq('user_id', user_id).execute()
+            
+            if not suggestion.data:
+                raise HTTPException(status_code=404, detail="Suggestion not found")
+            
+            suggestion_data = suggestion.data[0]
+            generated_lessons = suggestion_data.get('generated_lessons', [])
+            
+            if lesson_index >= len(generated_lessons):
+                raise HTTPException(status_code=400, detail="Invalid lesson index")
+            
+            # Remove the lesson at the specified index
+            generated_lessons.pop(lesson_index)
+            
+            # If no lessons left, mark entire suggestion as dismissed
+            if not generated_lessons:
+                result = supabase.table('lesson_suggestions').update({
+                    'status': 'dismissed',
+                    'generated_lessons': [],
+                    'suggestions_count': 0,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', suggestion_id).execute()
+            else:
+                # Update with remaining lessons
+                result = supabase.table('lesson_suggestions').update({
+                    'generated_lessons': generated_lessons,
+                    'suggestions_count': len(generated_lessons),
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', suggestion_id).execute()
+        else:
+            # Dismiss entire suggestion
+            result = supabase.table('lesson_suggestions').update({
+                'status': 'dismissed',
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', suggestion_id).eq('user_id', user_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        
+        return {"dismissed": True}
+        
+    except Exception as e:
+        logging.error(f"Error dismissing suggestion: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/lesson_suggestions/{suggestion_id}/use")
+async def use_lesson_suggestion(
+    suggestion_id: str,
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Create a custom lesson from a suggestion."""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        lesson_index = request.get('lesson_index', 0)
+        
+        # Get the suggestion
+        suggestion = supabase.table('lesson_suggestions').select('*').eq('id', suggestion_id).eq('user_id', user_id).execute()
+        
+        if not suggestion.data:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        
+        suggestion_data = suggestion.data[0]
+        generated_lessons = suggestion_data['generated_lessons']
+        
+        if lesson_index >= len(generated_lessons):
+            raise HTTPException(status_code=400, detail="Invalid lesson index")
+        
+        selected_lesson = generated_lessons[lesson_index]
+        
+        # Save as custom lesson template
+        custom_lesson = supabase.table('custom_lesson_templates').insert({
+            'user_id': user_id,
+            'curriculum_id': suggestion_data['curriculum_id'],
+            'title': selected_lesson['title'],
+            'language': selected_lesson.get('language', 'en'),
+            'difficulty': selected_lesson['difficulty'],
+            'objectives': selected_lesson['objectives'],
+            'content': selected_lesson['content'],
+            'cultural_element': selected_lesson['cultural_element'],
+            'practice_activity': selected_lesson['practice_activity'],
+            'targeted_weaknesses': selected_lesson['targeted_weaknesses'],
+            'order_num': 999
+        }).execute()
+        
+        # Remove the used lesson from the suggestions
+        generated_lessons.pop(lesson_index)
+        
+        # Update the suggestion record
+        if not generated_lessons:
+            # If no lessons left, mark entire suggestion as used
+            supabase.table('lesson_suggestions').update({
+                'status': 'used',
+                'generated_lessons': [],
+                'suggestions_count': 0,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', suggestion_id).execute()
+        else:
+            # Update with remaining lessons
+            supabase.table('lesson_suggestions').update({
+                'generated_lessons': generated_lessons,
+                'suggestions_count': len(generated_lessons),
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', suggestion_id).execute()
+        
+        return {
+            "lesson_created": True,
+            "lesson_id": custom_lesson.data[0]['id'],
+            "lesson": custom_lesson.data[0]
+        }
+        
+    except Exception as e:
+        logging.error(f"Error using lesson suggestion: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
