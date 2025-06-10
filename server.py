@@ -40,6 +40,9 @@ API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     raise ValueError("API key is missing. Please set the 'OPENAI_API_KEY' environment variable.")
 
+# Interaction mode configuration - can be "audio" or "text"
+INTERACTION_MODE = os.getenv("INTERACTION_MODE", "audio")
+
 WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17'
 
 # Initialize spaCy models
@@ -85,6 +88,109 @@ LANGUAGES = {
     'de': 'German',
     'kn': 'Kannada'
 }
+
+def get_feedback_categories(interaction_type: str = "audio") -> dict:
+    """Return appropriate feedback categories based on interaction type"""
+    
+    base_categories = {
+        "grammar": ["verb tense", "verb usage", "subject-verb agreement", "article usage", 
+                   "preposition usage", "pluralization", "auxiliary verb usage", 
+                   "modal verb usage", "pronoun agreement", "negation", 
+                   "comparatives/superlatives", "conditional structures", 
+                   "passive voice", "question formation", "other"],
+        "vocabulary": ["word meaning error", "false friend", "missing word", 
+                      "extra word", "word form", "other"],
+        "syntax": ["word order", "run-on sentence", "fragment/incomplete sentence", "other"],
+        "word choice": ["unnatural phrasing", "contextually inappropriate word", 
+                       "idiomatic error", "register mismatch", "other"],
+        "register/formality": ["informal in formal context", "formal in informal context", "other"]
+    }
+    
+    if interaction_type == "text":
+        # Add spelling and punctuation for text interactions
+        base_categories.update({
+            "spelling": ["common spelling error", "homophone confusion", "other"],
+            "punctuation": ["missing punctuation", "comma splice", "run-on sentence", 
+                           "quotation mark error", "other"]
+        })
+    
+    return base_categories
+
+def format_categories_for_prompt(categories: dict) -> str:
+    """Format categories dictionary into prompt text"""
+    category_lines = []
+    for category, types in categories.items():
+        types_str = ", ".join(types)
+        category_lines.append(f"        - {category}: {types_str}")
+    return "\n" + "\n".join(category_lines)
+
+async def get_existing_language_tags(language: str, limit: int = 30) -> List[str]:
+    """Get most commonly used language feature tags for this language"""
+    try:
+        result = supabase.table('language_feature_tags') \
+            .select('tag_name') \
+            .eq('language', language) \
+            .order('usage_count', desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        return [row['tag_name'] for row in result.data]
+    except Exception as e:
+        logging.warning(f"Error fetching existing language tags: {e}")
+        return []
+
+async def upsert_language_tag(tag_name: str, language: str) -> None:
+    """Create or update a language feature tag usage count"""
+    try:
+        # First try to increment existing tag
+        existing = supabase.table('language_feature_tags') \
+            .select('id, usage_count') \
+            .eq('tag_name', tag_name) \
+            .eq('language', language) \
+            .execute()
+        
+        if existing.data:
+            # Update usage count
+            new_count = existing.data[0]['usage_count'] + 1
+            supabase.table('language_feature_tags') \
+                .update({'usage_count': new_count, 'updated_at': 'now()'}) \
+                .eq('id', existing.data[0]['id']) \
+                .execute()
+        else:
+            # Create new tag
+            supabase.table('language_feature_tags') \
+                .insert({
+                    'tag_name': tag_name,
+                    'language': language,
+                    'usage_count': 1
+                }) \
+                .execute()
+                
+    except Exception as e:
+        logging.warning(f"Error upserting language tag {tag_name}: {e}")
+
+async def record_language_tags(tags: List[str], language: str) -> None:
+    """Record usage of language feature tags"""
+    if not tags:
+        return
+    
+    # Filter and clean tags
+    clean_tags = []
+    for tag in tags:
+        if tag and isinstance(tag, str) and len(tag.strip()) > 0:
+            # Basic cleanup and validation
+            clean_tag = tag.lower().strip().replace(' ', '_')
+            # Filter out obvious invalid tags
+            if (len(clean_tag) > 2 and 
+                clean_tag not in ['a1', 'a2', 'b1', 'b2', 'c1', 'c2'] and
+                clean_tag not in ['minor', 'moderate', 'critical'] and
+                clean_tag not in ['grammar', 'vocabulary', 'syntax'] and
+                not clean_tag.isdigit()):
+                clean_tags.append(clean_tag)
+    
+    # Record each tag
+    for tag in clean_tags:
+        await upsert_language_tag(tag, language)
 
 app = FastAPI()
 
@@ -279,7 +385,7 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
     )
     return base_instructions
 
-async def process_feedback_background(message_id: str, language: str, level: str, client_ws: WebSocket):
+async def process_feedback_background(message_id: str, language: str, level: str, client_ws: WebSocket, interaction_type: str = "audio"):
     """Process feedback in the background without blocking the conversation"""
     try:
         # Get the message from the database
@@ -302,10 +408,48 @@ async def process_feedback_background(message_id: str, language: str, level: str
         # Get recent messages for context
         context_messages = supabase.table('messages').select('*').eq('conversation_id', message['conversation_id']).order('created_at', desc=True).limit(5).execute()
         
+        # Get appropriate categories based on interaction type
+        categories = get_feedback_categories(interaction_type)
+        category_text = format_categories_for_prompt(categories)
+        
+        # Build category options for JSON format
+        category_options = "|".join(categories.keys())
+        
+        # Get existing language tags for this language
+        existing_tags = await get_existing_language_tags(language, limit=25)
+        
+        # Format existing tags for prompt
+        if existing_tags:
+            tag_guidance = f"""
+        
+Existing language feature tags (prefer these when the error fits):
+{', '.join(existing_tags)}
+
+Tag assignment strategy:
+1. CHECK if the error matches an EXISTING tag above - use it if appropriate
+2. Only create a NEW tag if the linguistic pattern is truly different
+3. New tags should follow the naming style you see: underscores, specific, concise
+4. Maximum 3 tags per mistake, focus on the most teachable aspects
+5. Examples of good tags: "past_tense", "ser_vs_estar", "noun_gender", "question_formation"
+
+Remember: Consistency helps students see patterns in their learning!
+            """
+        else:
+            tag_guidance = """
+        
+Language feature tag guidelines:
+- Use underscores for multi-word concepts: "past_tense", "noun_gender"
+- Be specific but concise: "question_formation" not "questions"
+- Focus on teachable grammatical patterns
+- Maximum 3 tags per mistake, prioritize the most relevant
+- Examples: "past_tense", "ser_vs_estar", "noun_gender", "conditional_mood"
+            """
+        
         # Prepare the prompt for OpenAI
         prompt = f"""Analyze the following message in {language} for language learning feedback.
         Student Level: {level}
         Context: {conversation['context']}
+        Interaction Type: {interaction_type}
         
         Recent conversation context:
         {format_conversation_context(context_messages.data)}
@@ -319,7 +463,7 @@ async def process_feedback_background(message_id: str, language: str, level: str
             "originalMessage": "{original_message}",
             "mistakes": [
                 {{
-                    "category": "grammar|vocabulary|spelling|punctuation|syntax|word choice|register/formality|other",
+                    "category": "{category_options}|other",
                     "type": "<specific mistake type>",
                     "error": "<incorrect text>",
                     "correction": "<corrected text>",
@@ -330,16 +474,11 @@ async def process_feedback_background(message_id: str, language: str, level: str
             ]
         }}
         
-        Categories and types must be from the predefined lists:
-        - grammar: verb tense, verb usage, subject-verb agreement, article usage, preposition usage, pluralization, auxiliary verb usage, modal verb usage, pronoun agreement, negation, comparatives/superlatives, conditional structures, passive voice, question formation, other
-        - vocabulary: word meaning error, false friend, missing word, extra word, word form, other
-        - spelling: common spelling error, homophone confusion, other
-        - punctuation: missing punctuation, comma splice, run-on sentence, quotation mark error, other
-        - syntax: word order, run-on sentence, fragment/incomplete sentence, other
-        - word choice: unnatural phrasing, contextually inappropriate word, idiomatic error, register mismatch, other
-        - register/formality: informal in formal context, formal in informal context, other
+        Categories and types must be from the predefined lists:{category_text}
+        {tag_guidance}
         
         Important: If the message is perfect for the student's level, return an empty mistakes array.
+        Note: For audio interactions, focus on spoken language patterns and avoid feedback that would only apply to written text.
         """
         
         # Call OpenAI API using aiohttp
@@ -386,6 +525,15 @@ async def process_feedback_background(message_id: str, language: str, level: str
             'original_message': original_message,
             'mistakes': mistakes_dict
         }).execute()
+        
+        # Record language feature tags from all mistakes
+        all_tags = []
+        for mistake in feedback.mistakes:
+            if mistake.languageFeatureTags:
+                all_tags.extend(mistake.languageFeatureTags)
+        
+        if all_tags:
+            await record_language_tags(all_tags, language)
         
         # Send feedback to client
         await client_ws.send_json({
@@ -535,7 +683,7 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                                     "message_id": message_id,
                                     "transcript": transcript
                                 })
-                                asyncio.create_task(process_feedback_background(message_id, language, level, client_ws))
+                                asyncio.create_task(process_feedback_background(message_id, language, level, client_ws, INTERACTION_MODE))
                                 logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
                         except Exception as e:
                             logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
@@ -1073,12 +1221,13 @@ async def get_feedback(
                 
         dummy_ws = DummyWebSocket()
         
-        # Generate feedback
+        # Generate feedback using configured interaction mode
         await process_feedback_background(
             request.message_id,
             conversation.data[0]['language'],
             conversation.data[0]['level'],
-            dummy_ws
+            dummy_ws,
+            INTERACTION_MODE
         )
         
         if hasattr(dummy_ws, 'last_response'):
@@ -1232,6 +1381,28 @@ async def delete_lesson(lesson_id: str, token: str = Query(...)):
 async def list_lesson_templates(language: str):
     result = supabase.table('lesson_templates').select('*').eq('language', language).order('order_num', desc=False).execute()
     return result.data
+
+@app.get("/api/language_tags")
+async def get_language_tags(language: str, limit: int = 50, token: str = Query(...)):
+    """Get language feature tags for a specific language"""
+    try:
+        verify_jwt(token)  # Verify user is authenticated
+        
+        result = supabase.table('language_feature_tags') \
+            .select('tag_name, usage_count, created_at, updated_at') \
+            .eq('language', language) \
+            .order('usage_count', desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        return {
+            "language": language,
+            "tags": result.data,
+            "total_count": len(result.data)
+        }
+    except Exception as e:
+        logging.error(f"Error fetching language tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/user_knowledge")
 async def get_user_knowledge(language: str, token: str = Query(...)):

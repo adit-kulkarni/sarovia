@@ -47,6 +47,25 @@ This is a language learning platform that uses OpenAI's Realtime API for voice c
 - **JWT Authentication**: Secure user sessions
 - **React/Next.js Frontend**: Modern, responsive user interface
 
+### Feedback Analytics
+- **Intelligent Feedback**: AI analyzes conversations and provides specific feedback on grammar, vocabulary, word choice, etc.
+- **Pattern Recognition**: Groups mistakes by category and type for targeted improvement
+- **Severity Tracking**: Mistakes categorized as minor, moderate, or critical
+- **Progress Analytics**: Detailed charts showing improvement over time
+
+#### Interaction Modes
+The platform supports different interaction modes with appropriate feedback categories:
+
+**Audio Mode (Default)**:
+- Focuses on spoken language patterns
+- Excludes spelling and punctuation feedback (not relevant for voice)
+- Categories: Grammar, Vocabulary, Syntax, Word Choice, Register/Formality
+
+**Text Mode (Future)**:
+- Includes all feedback categories for written communication
+- Additional categories: Spelling, Punctuation
+- Can be enabled by setting `INTERACTION_MODE=text` environment variable
+
 ## API Endpoints
 
 ### Custom Lesson Endpoints

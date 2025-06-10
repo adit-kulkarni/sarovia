@@ -20,8 +20,8 @@ interface MistakeCategoriesChartProps {
 const categoryColors = {
   grammar: '#FF6384',
   vocabulary: '#36A2EB',
-  spelling: '#FFCE56',
-  punctuation: '#4BC0C0',
+  spelling: '#FFCE56',          // For future text-based interactions
+  punctuation: '#4BC0C0',       // For future text-based interactions
   syntax: '#9966FF',
   'word choice': '#FF9F40',
   'register/formality': '#C9CBCF',
