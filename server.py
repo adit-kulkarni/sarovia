@@ -529,6 +529,36 @@ Language feature tag guidelines:
             'mistakes': mistakes_dict
         }).execute()
         
+        # Invalidate insights cache since we have new feedback data
+        try:
+            # Get the conversation/curriculum info to invalidate the right cache
+            # First get the message to find the conversation
+            message_result = supabase.table('messages') \
+                .select('conversation_id') \
+                .eq('id', message_id) \
+                .execute()
+            
+            if message_result.data and len(message_result.data) > 0:
+                conversation_id = message_result.data[0]['conversation_id']
+                
+                # Now get the conversation details
+                conversation_result = supabase.table('conversations') \
+                    .select('user_id, curriculum_id') \
+                    .eq('id', conversation_id) \
+                    .execute()
+                
+                if conversation_result.data and len(conversation_result.data) > 0:
+                    conv_data = conversation_result.data[0]
+                    user_id = conv_data['user_id']
+                    curriculum_id = conv_data['curriculum_id']
+                    
+                    if curriculum_id:  # Only invalidate if we have a curriculum_id
+                        await invalidate_insights_cache(user_id, curriculum_id)
+                        logging.info(f"[Background] Invalidated insights cache for user {user_id}, curriculum {curriculum_id}")
+        except Exception as e:
+            logging.error(f"[Background] Error invalidating insights cache: {e}")
+            # Don't fail the feedback processing if cache invalidation fails
+        
         # Record language feature tags from all mistakes
         all_tags = []
         for mistake in feedback.mistakes:
@@ -3729,9 +3759,10 @@ async def generate_chart_data_for_insight(insight: dict, patterns_data: dict, to
 async def get_user_insights(
     curriculum_id: str = Query(...),
     days: int = Query(default=30),
+    refresh: bool = Query(default=False),
     token: str = Query(...)
 ):
-    """Get AI-generated insights for user's language learning progress"""
+    """Get AI-generated insights for user's language learning progress (cached)"""
     try:
         # Verify JWT token
         payload = verify_jwt(token)
@@ -3752,12 +3783,17 @@ async def get_user_insights(
         language = curriculum_result.data[0]['language']
         logging.info(f"Curriculum language: {language}")
         
-        # Analyze feedback patterns
-        patterns_data = await analyze_feedback_patterns(user_id, curriculum_id, days)
-        logging.info(f"Patterns data: {patterns_data}")
+        # Use cached insights or generate new ones (or force refresh)
+        if refresh:
+            # Invalidate cache first if force refresh requested
+            await invalidate_insights_cache(user_id, curriculum_id)
+            logging.info(f"Force refresh requested - invalidated cache for user {user_id}, curriculum {curriculum_id}")
         
-        if not patterns_data:
-            # Return empty insights for new users
+        try:
+            return await get_cached_insights_or_generate(user_id, curriculum_id, language, days)
+        except Exception as cache_error:
+            logging.error(f"Error in caching function: {cache_error}")
+            # Fallback: return empty insights instead of crashing
             return InsightsResponse(
                 insights=[],
                 last_updated=datetime.now(timezone.utc),
@@ -3768,24 +3804,6 @@ async def get_user_insights(
                     'improvement_areas': 0
                 }
             )
-        
-        # Generate AI insights
-        insight_cards = await generate_insight_cards(patterns_data, user_id, language)
-        logging.info(f"Generated {len(insight_cards)} insight cards")
-        
-        # Create summary
-        summary = {
-            'total_patterns': len(patterns_data.get('mistake_patterns', {})),
-            'total_conversations': patterns_data.get('conversation_quality', {}).get('total_conversations', 0),
-            'improvement_areas': len([card for card in insight_cards if card.severity in ['moderate', 'high']])
-        }
-        
-        return InsightsResponse(
-            insights=insight_cards,
-            last_updated=datetime.now(timezone.utc),
-            analysis_period=f"{days} days",
-            summary=summary
-        )
         
     except jwt.InvalidTokenError as e:
         logging.error(f"JWT token error: {e}")
@@ -4035,6 +4053,194 @@ async def get_demo_insights(language: str = Query(default="es")):
             "improvement_areas": 2
         }
     )
+
+# Add after the existing models, around line 3460
+class CachedInsights(BaseModel):
+    curriculum_id: str
+    user_id: str
+    insights_data: dict
+    last_feedback_count: int
+    created_at: datetime
+    updated_at: datetime
+
+# Add this function after analyze_feedback_patterns function, around line 3560
+async def get_cached_insights_or_generate(user_id: str, curriculum_id: str, language: str, days: int = 30) -> InsightsResponse:
+    """Get cached insights or generate new ones if data has changed"""
+    
+    logging.info(f"Getting insights for user {user_id}, curriculum {curriculum_id}, language {language}")
+    
+    # First, get current feedback count for this curriculum using SQL
+    try:
+        feedback_count_result = supabase.rpc('get_feedback_count_for_curriculum', {
+            'p_user_id': user_id,
+            'p_curriculum_id': curriculum_id
+        }).execute()
+        
+        current_feedback_count = feedback_count_result.data if feedback_count_result.data else 0
+        if isinstance(current_feedback_count, list) and len(current_feedback_count) > 0:
+            current_feedback_count = current_feedback_count[0]
+    except Exception as e:
+        logging.warning(f"Failed to get feedback count via RPC, falling back to direct SQL: {e}")
+        # Fallback: use a simpler approach
+        try:
+            # Get all conversations for this curriculum/user and count their feedback
+            conversations_result = supabase.table('conversations') \
+                .select('id') \
+                .eq('user_id', user_id) \
+                .eq('curriculum_id', curriculum_id) \
+                .execute()
+            
+            if conversations_result.data:
+                conversation_ids = [conv['id'] for conv in conversations_result.data]
+                if conversation_ids:
+                    # Get messages for these conversations
+                    messages_result = supabase.table('messages') \
+                        .select('id') \
+                        .in_('conversation_id', conversation_ids) \
+                        .execute()
+                    
+                    if messages_result.data:
+                        message_ids = [msg['id'] for msg in messages_result.data]
+                        if message_ids:
+                            # Count feedback for these messages
+                            feedback_result = supabase.table('message_feedback') \
+                                .select('id', count='exact') \
+                                .in_('message_id', message_ids) \
+                                .execute()
+                            current_feedback_count = feedback_result.count or 0
+                        else:
+                            current_feedback_count = 0
+                    else:
+                        current_feedback_count = 0
+                else:
+                    current_feedback_count = 0
+            else:
+                current_feedback_count = 0
+        except Exception as fallback_error:
+            logging.error(f"Fallback feedback counting also failed: {fallback_error}")
+            current_feedback_count = 0
+    
+    # Check if we have cached insights
+    cached_result = supabase.table('cached_insights') \
+        .select('*') \
+        .eq('curriculum_id', curriculum_id) \
+        .eq('user_id', user_id) \
+        .execute()
+    
+    # If we have cached insights and feedback count hasn't changed, return cached
+    if cached_result.data and len(cached_result.data) > 0:
+        cached = cached_result.data[0]
+        if cached['last_feedback_count'] == current_feedback_count:
+            logging.info(f"Returning cached insights for user {user_id}, curriculum {curriculum_id}")
+            insights_data = cached['insights_data']
+            try:
+                # Parse the datetime safely
+                last_updated = insights_data['last_updated']
+                if isinstance(last_updated, str):
+                    # Remove timezone info if present for parsing
+                    if last_updated.endswith('Z'):
+                        last_updated = last_updated[:-1] + '+00:00'
+                    last_updated_dt = datetime.fromisoformat(last_updated)
+                else:
+                    last_updated_dt = datetime.now(timezone.utc)
+                
+                return InsightsResponse(
+                    insights=[InsightCard(**insight) for insight in insights_data['insights']],
+                    last_updated=last_updated_dt,
+                    analysis_period=insights_data['analysis_period'],
+                    summary=insights_data['summary']
+                )
+            except Exception as parse_error:
+                logging.error(f"Error parsing cached insights: {parse_error}")
+                # If parsing fails, regenerate insights
+                logging.info("Regenerating insights due to parse error")
+                # Continue to generate fresh insights
+    
+    # Generate new insights since cache is stale or doesn't exist
+    logging.info(f"Generating fresh insights for user {user_id}, curriculum {curriculum_id}")
+    
+    # Analyze feedback patterns
+    patterns_data = await analyze_feedback_patterns(user_id, curriculum_id, days)
+    
+    if not patterns_data:
+        # Return empty insights for new users
+        empty_response = InsightsResponse(
+            insights=[],
+            last_updated=datetime.now(timezone.utc),
+            analysis_period=f"{days} days",
+            summary={
+                'total_patterns': 0,
+                'total_conversations': 0,
+                'improvement_areas': 0
+            }
+        )
+        return empty_response
+    
+    # Generate AI insights
+    insight_cards = await generate_insight_cards(patterns_data, user_id, language)
+    
+    # Create summary
+    summary = {
+        'total_patterns': len(patterns_data.get('mistake_patterns', {})),
+        'total_conversations': patterns_data.get('conversation_quality', {}).get('total_conversations', 0),
+        'improvement_areas': len([card for card in insight_cards if card.severity in ['moderate', 'high']])
+    }
+    
+    # Create response
+    response = InsightsResponse(
+        insights=insight_cards,
+        last_updated=datetime.now(timezone.utc),
+        analysis_period=f"{days} days",
+        summary=summary
+    )
+    
+    # Cache the insights
+    insights_data = {
+        'insights': [card.dict() for card in insight_cards],
+        'last_updated': response.last_updated.isoformat(),
+        'analysis_period': response.analysis_period,
+        'summary': response.summary
+    }
+    
+    # Upsert cached insights
+    if cached_result.data and len(cached_result.data) > 0:
+        # Update existing cache
+        supabase.table('cached_insights') \
+            .update({
+                'insights_data': insights_data,
+                'last_feedback_count': current_feedback_count,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }) \
+            .eq('curriculum_id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+    else:
+        # Insert new cache
+        supabase.table('cached_insights') \
+            .insert({
+                'curriculum_id': curriculum_id,
+                'user_id': user_id,
+                'insights_data': insights_data,
+                'last_feedback_count': current_feedback_count,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }) \
+            .execute()
+    
+    return response
+
+# Function to invalidate insights cache when new feedback is added
+async def invalidate_insights_cache(user_id: str, curriculum_id: str):
+    """Invalidate cached insights for a specific user/curriculum"""
+    try:
+        supabase.table('cached_insights') \
+            .delete() \
+            .eq('curriculum_id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        logging.info(f"Invalidated insights cache for user {user_id}, curriculum {curriculum_id}")
+    except Exception as e:
+        logging.error(f"Error invalidating insights cache: {e}")
 
 if __name__ == "__main__":
     import uvicorn

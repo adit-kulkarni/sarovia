@@ -75,6 +75,9 @@ The platform supports different interaction modes with appropriate feedback cate
 - `POST /api/start_custom_lesson_conversation` - Start a conversation with a custom lesson
 - `DELETE /api/custom_lessons/{id}` - Delete a custom lesson
 
+### AI Insights
+- `GET /api/insights?curriculum_id={id}&refresh={bool}` - Get cached AI insights (automatically refresh when new feedback is available)
+
 ### Other Endpoints
 - `WebSocket /ws` - Real-time conversation handling
 - `POST /api/hint` - Get conversation hints
@@ -104,6 +107,7 @@ The platform supports different interaction modes with appropriate feedback cate
    - `schema.sql`
    - `schema_feedback.sql`
    - `schema_custom_lessons.sql`
+   - `schema_cached_insights.sql`
 
 4. **Run the Application**:
    ```bash
@@ -133,6 +137,9 @@ The platform supports different interaction modes with appropriate feedback cate
 
 ### Custom Lesson Tables
 - `custom_lesson_templates` - AI-generated personalized lessons
+
+### Analytics Tables
+- `cached_insights` - Cached AI-generated insights to avoid regeneration
 - `lesson_templates` - Pre-built lesson templates
 
 ## Contributing

@@ -377,30 +377,34 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   const [insights, setInsights] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchInsights = async (forceRefresh = false) => {
+    try {
+      const loadingState = forceRefresh ? setRefreshing : setLoading;
+      loadingState(true);
+      setError(null);
+      
+      // Add cache-busting parameter for force refresh
+      const url = `${API_BASE}/api/insights?curriculum_id=${curriculumId}&days=30&token=${token}${forceRefresh ? '&refresh=true' : ''}`;
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setInsights(data);
+      } else {
+        throw new Error(`Failed to fetch insights: ${response.status}`);
+      }
+    } catch (err) {
+      console.error('Error fetching insights:', err);
+      setError('Failed to load insights from your conversation data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchInsights = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        
-        // Only fetch real insights - no demo fallback
-        const response = await fetch(`${API_BASE}/api/insights?curriculum_id=${curriculumId}&days=30&token=${token}`);
-        
-        if (response.ok) {
-          const data = await response.json();
-          setInsights(data);
-        } else {
-          throw new Error(`Failed to fetch insights: ${response.status}`);
-        }
-      } catch (err) {
-        console.error('Error fetching insights:', err);
-        setError('Failed to load insights from your conversation data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     if (curriculumId && token) {
       fetchInsights();
     }
@@ -444,7 +448,22 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
     <div className="space-y-4">
       {/* Summary */}
       <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-        <h3 className="font-semibold text-orange-800 mb-2">Analysis Summary</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-semibold text-orange-800">Analysis Summary</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchInsights(true)}
+              disabled={refreshing}
+              className="text-xs text-orange-600 bg-orange-200 hover:bg-orange-300 px-2 py-1 rounded transition-colors disabled:opacity-50"
+              title="Refresh insights with latest data"
+            >
+              {refreshing ? '🔄 Refreshing...' : '🔄 Refresh'}
+            </button>
+            <div className="text-xs text-orange-600 bg-orange-200 px-2 py-1 rounded">
+              Updated: {new Date(insights.last_updated).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-3 gap-4 text-sm">
           <div>
             <div className="text-2xl font-bold text-orange-600">{insights.summary.total_conversations}</div>
