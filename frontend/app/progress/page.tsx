@@ -2,6 +2,16 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import YourKnowledgePanel from '../components/YourKnowledgePanel';
+import WeaknessAnalysis from '../components/WeaknessAnalysis';
+import MistakeCategoriesChart from '../components/MistakeCategoriesChart';
+import SeverityAnalysisChart from '../components/SeverityAnalysisChart';
+import CommonMistakesList from '../components/CommonMistakesList';
+import ProgressOverTimeChart from '../components/ProgressOverTimeChart';
+import ScaledMistakesPerConversationChart from '../components/ScaledMistakesPerConversationChart';
+import LanguageFeaturesHeatmap from '../components/LanguageFeaturesHeatmap';
+import { supabase } from '../../supabaseClient';
+import { Mistake, Feedback } from '../types/feedback';
 
 // Types
 interface InsightCard {
@@ -30,6 +40,14 @@ interface InsightsData {
     total_conversations: number;
     improvement_areas: number;
   };
+}
+
+// Using imported types from '../types/feedback'
+interface DatabaseFeedback {
+  id: string;
+  mistakes: Mistake[];
+  created_at: string;
+  user_id: string;
 }
 
 // Chart Component
@@ -182,21 +200,33 @@ const PARTS = [
 ];
 
 export default function ProgressPage() {
-  const [activeTab, setActiveTab] = useState('insights');
+  const [activeTab, setActiveTab] = useState('growth');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [insights, setInsights] = useState(null);
+  const [insights, setInsights] = useState<InsightsData | null>(null);
+  const [feedbacks, setFeedbacks] = useState<DatabaseFeedback[]>([]);
+  const [currentCurriculum, setCurrentCurriculum] = useState<any>(null);
+  const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
   const router = useRouter();
 
   useEffect(() => {
-    const checkAuth = () => {
+    const checkAuth = async () => {
       const token = localStorage.getItem('token');
       if (!token) {
         router.push('/');
         return;
       }
       
-      // For now, just load demo data
+      // Load current curriculum
+      const curriculum = localStorage.getItem('selectedCurriculum');
+      if (curriculum) {
+        setCurrentCurriculum(JSON.parse(curriculum));
+      }
+      
+      // Load feedback data
+      await loadFeedbackData();
+      
+      // For now, just load demo insights data
       setTimeout(() => {
         setInsights({
           insights: [
@@ -206,7 +236,9 @@ export default function ProgressPage() {
               type: 'grammar_pattern',
               severity: 'moderate',
               trend: 'stable',
-              action: 'Practice the differences between ser (permanent) and estar (temporary)'
+              action: 'Practice the differences between ser (permanent) and estar (temporary)',
+              chart_type: 'bar',
+              chart_data: { labels: [], data: [], type: 'bar' }
             },
             {
               id: 'demo-2', 
@@ -214,9 +246,13 @@ export default function ProgressPage() {
               type: 'progress_trend',
               severity: 'low',
               trend: 'improving',
-              action: 'Keep practicing past tense verbs to maintain progress'
+              action: 'Keep practicing past tense verbs to maintain progress',
+              chart_type: 'line',
+              chart_data: { labels: [], data: [], type: 'line' }
             }
           ],
+          last_updated: new Date().toISOString(),
+          analysis_period: '30 days',
           summary: {
             total_conversations: 12,
             total_patterns: 8,
@@ -229,6 +265,28 @@ export default function ProgressPage() {
 
     checkAuth();
   }, [router]);
+
+  const loadFeedbackData = async () => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.user) return;
+
+      const { data, error } = await supabase
+        .from('feedback')
+        .select('*')
+        .eq('user_id', session.session.user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error loading feedback:', error);
+        return;
+      }
+
+      setFeedbacks(data || []);
+    } catch (err) {
+      console.error('Error loading feedback data:', err);
+    }
+  };
 
   if (loading) {
     return (
@@ -256,16 +314,29 @@ export default function ProgressPage() {
     );
   }
 
+  // Get all mistakes from feedbacks
+  const allMistakes = feedbacks.reduce((acc, feedback) => [...acc, ...feedback.mistakes], [] as Mistake[]);
+
   return (
     <div className="max-w-6xl mx-auto p-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Your Progress</h1>
-        <p className="text-gray-600">AI-powered insights into your language learning journey</p>
+        <p className="text-gray-600">Track your language learning journey with personalized insights and analytics</p>
       </div>
 
       {/* Tab Navigation */}
       <div className="border-b border-gray-200 mb-8">
         <nav className="-mb-px flex space-x-8">
+          <button
+            onClick={() => setActiveTab('growth')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'growth'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Growth
+          </button>
           <button
             onClick={() => setActiveTab('insights')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
@@ -282,19 +353,59 @@ export default function ProgressPage() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab('growth')}
+            onClick={() => setActiveTab('data')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'growth'
+              activeTab === 'data'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            Your Growth
+            Data
           </button>
         </nav>
       </div>
 
       {/* Tab Content */}
+      {activeTab === 'growth' && (
+        <div className="space-y-8">
+          {currentCurriculum ? (
+            <>
+              {/* Your Knowledge Panel */}
+              <div>
+                <YourKnowledgePanel 
+                  language={currentCurriculum.language} 
+                  level={currentCurriculum.start_level}
+                  refreshTrigger={knowledgeRefreshKey}
+                />
+              </div>
+
+              {/* Custom Lessons Section */}
+              <div>
+                <WeaknessAnalysis 
+                  curriculumId={currentCurriculum.id} 
+                  language={currentCurriculum.language}
+                  token={localStorage.getItem('token') || ''}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-12">
+              <div className="text-6xl mb-4">📚</div>
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">Select a Curriculum</h3>
+              <p className="text-gray-600 mb-4">
+                Choose a curriculum from the main dashboard to see your knowledge progress.
+              </p>
+              <button
+                onClick={() => router.push('/')}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Go to Dashboard
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'insights' && (
         <div className="space-y-6">
           {insights && insights.insights.length > 0 ? (
@@ -365,15 +476,98 @@ export default function ProgressPage() {
         </div>
       )}
 
-      {activeTab === 'growth' && (
+      {activeTab === 'data' && (
         <div className="space-y-8">
-          <div className="text-center py-12">
-            <div className="text-6xl mb-4">📈</div>
-            <h3 className="text-xl font-semibold text-gray-700 mb-2">Growth Analysis Coming Soon</h3>
-            <p className="text-gray-600">
-              Your detailed knowledge analysis will appear here as you practice more.
-            </p>
-          </div>
+          {allMistakes.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left Column */}
+              <div className="space-y-6">
+                {/* Mistake Categories Chart */}
+                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                  <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
+                  <div className="flex-1 overflow-hidden">
+                    <MistakeCategoriesChart mistakes={allMistakes} />
+                  </div>
+                </div>
+
+                {/* Severity Analysis */}
+                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                  <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
+                  <div className="flex-1 overflow-hidden">
+                    <SeverityAnalysisChart 
+                      mistakes={allMistakes}
+                      totalConversations={feedbacks.length}
+                      totalMessages={feedbacks.length}
+                    />
+                  </div>
+                </div>
+
+                {/* Common Mistake Types */}
+                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                  <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
+                  <div className="flex-1 overflow-y-auto">
+                    <CommonMistakesList mistakes={allMistakes} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column */}
+              <div className="space-y-6">
+                {/* Progress Over Time */}
+                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                  <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
+                  <div className="flex-1 overflow-hidden">
+                    <ProgressOverTimeChart 
+                      mistakes={allMistakes}
+                      feedbacks={feedbacks.map(f => ({
+                        timestamp: f.created_at,
+                        mistakes: f.mistakes
+                      }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Language Feature Analysis */}
+                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                  <h3 className="text-lg font-medium mb-4">Language Features</h3>
+                  <div className="flex-1 overflow-y-auto">
+                    <LanguageFeaturesHeatmap mistakes={allMistakes} />
+                  </div>
+                </div>
+
+                                 {/* Context Performance */}
+                 <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+                   <h3 className="text-lg font-medium mb-4">Mistakes per Conversation</h3>
+                   <div className="flex-1 overflow-hidden">
+                     <ScaledMistakesPerConversationChart 
+                       feedbacks={feedbacks.map(f => ({
+                         ...f,
+                         messageId: f.id,
+                         originalMessage: '',
+                         hasMistakes: f.mistakes.length > 0,
+                         timestamp: f.created_at,
+                         conversation_id: f.id // Use id as conversation_id for now
+                       } as any))} 
+                     />
+                   </div>
+                 </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <div className="text-6xl mb-4">📈</div>
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">No Data Available Yet</h3>
+              <p className="text-gray-600 mb-4">
+                Start practicing to see detailed analytics and visualizations of your progress.
+              </p>
+              <button
+                onClick={() => router.push('/chat')}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Start Practicing
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

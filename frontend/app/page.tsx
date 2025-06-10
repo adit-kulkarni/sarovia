@@ -184,6 +184,191 @@ const supabaseClient = createClient(
 );
 
 // AI Insights Component
+// Progress Section Component with Tabs
+const ProgressSection = ({ 
+  selectedCurriculum, 
+  feedbackLoading, 
+  feedbackError, 
+  filteredFeedbacks, 
+  knowledgeRefreshKey, 
+  token 
+}: {
+  selectedCurriculum: Curriculum;
+  feedbackLoading: boolean;
+  feedbackError: string | null;
+  filteredFeedbacks: Feedback[];
+  knowledgeRefreshKey: number;
+  token: string | null;
+}) => {
+  const [activeTab, setActiveTab] = useState('growth');
+  
+  // Get all mistakes from feedbacks
+  const allMistakes = filteredFeedbacks.reduce((acc, feedback) => [...acc, ...feedback.mistakes], [] as Mistake[]);
+  
+  if (feedbackLoading) {
+    return (
+      <div className="mb-8">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">Your Progress</h2>
+        <div className="bg-white rounded shadow p-6 text-gray-500 text-center">Loading analytics...</div>
+      </div>
+    );
+  }
+  
+  if (feedbackError) {
+    return (
+      <div className="mb-8">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">Your Progress</h2>
+        <div className="bg-white rounded shadow p-6 text-red-500 text-center">{feedbackError}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-8">
+      <h2 className="retro-header text-3xl font-extrabold text-center mb-6">Your Progress</h2>
+      
+      {/* Tab Navigation */}
+      <div className="mb-8">
+        <nav className="flex justify-center space-x-4">
+          <button
+            onClick={() => setActiveTab('growth')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'growth'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            📈 Growth
+          </button>
+          <button
+            onClick={() => setActiveTab('insights')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'insights'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            💡 Insights
+          </button>
+          <button
+            onClick={() => setActiveTab('data')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'data'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            📊 Data
+          </button>
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'growth' && (
+        <div className="space-y-6">
+          {/* Your Knowledge Panel */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <YourKnowledgePanel 
+              language={selectedCurriculum.language} 
+              level={selectedCurriculum.start_level}
+              refreshTrigger={knowledgeRefreshKey}
+            />
+          </div>
+          
+          {/* Custom Lessons Section */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <WeaknessAnalysis 
+              curriculumId={selectedCurriculum.id} 
+              language={selectedCurriculum.language}
+              token={token || ''}
+            />
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'insights' && (
+        <div className="space-y-6">
+          {token && (
+            <AIInsightsSection 
+              curriculumId={selectedCurriculum.id}
+              token={token}
+              language={selectedCurriculum.language}
+            />
+          )}
+        </div>
+      )}
+
+      {activeTab === 'data' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left Column */}
+          <div className="space-y-6">
+            {/* Mistake Categories Chart */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
+              <div className="flex-1 overflow-hidden">
+                <MistakeCategoriesChart mistakes={allMistakes} />
+              </div>
+            </div>
+            
+            {/* Severity Analysis */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
+              <div className="flex-1 overflow-hidden">
+                <SeverityAnalysisChart 
+                  mistakes={allMistakes}
+                  totalConversations={filteredFeedbacks.length}
+                  totalMessages={filteredFeedbacks.length}
+                />
+              </div>
+            </div>
+            
+            {/* Common Mistake Types */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
+              <div className="flex-1 overflow-y-auto">
+                <CommonMistakesList mistakes={allMistakes} />
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-6">
+            {/* Progress Over Time */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
+              <div className="flex-1 overflow-hidden">
+                <ProgressOverTimeChart 
+                  mistakes={allMistakes}
+                  feedbacks={filteredFeedbacks.map(f => ({
+                    timestamp: f.created_at || f.timestamp,
+                    mistakes: f.mistakes
+                  }))}
+                />
+              </div>
+            </div>
+            
+            {/* Language Feature Analysis */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Language Features</h3>
+              <div className="flex-1 overflow-y-auto">
+                <LanguageFeaturesHeatmap mistakes={allMistakes} />
+              </div>
+            </div>
+            
+            {/* Context Performance */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
+              <div className="flex-1 overflow-hidden">
+                <ScaledMistakesPerConversationChart feedbacks={filteredFeedbacks} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AIInsightsSection = ({ curriculumId, token, language }: { 
   curriculumId: string; 
   token: string; 
@@ -863,112 +1048,17 @@ const Dashboard = () => {
 
       {/* User Progress Analytics */}
       {selectedCurriculum && (
-        <div className="mb-8">
-          <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
-            Your Progress
-          </h2>
-          {feedbackLoading ? (
-            <div className="bg-white rounded shadow p-6 text-gray-500 text-center">Loading analytics...</div>
-          ) : feedbackError ? (
-            <div className="bg-white rounded shadow p-6 text-red-500 text-center">{feedbackError}</div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Left Column */}
-              <div className="space-y-6">
-                {/* Your Knowledge Panel as first analytics card */}
-                <div className="bg-white rounded-lg shadow p-6">
-                  <YourKnowledgePanel 
-                    language={selectedCurriculum.language} 
-                    level={selectedCurriculum.start_level}
-                    refreshTrigger={knowledgeRefreshKey}
-                  />
-                </div>
-                {/* 1. Mistake Categories Chart */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <MistakeCategoriesChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-                {/* 2. Severity Analysis */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <SeverityAnalysisChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
-                      totalConversations={filteredFeedbacks.length}
-                      totalMessages={filteredFeedbacks.length}
-                    />
-                  </div>
-                </div>
-                {/* 3. Common Mistake Types */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
-                  <div className="flex-1 overflow-y-auto">
-                    <CommonMistakesList 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-              </div>
-              {/* Right Column */}
-              <div className="space-y-6">
-                {/* Weakness Analysis and Custom Lessons */}
-                <div className="bg-white rounded-lg shadow p-6">
-                  <WeaknessAnalysis 
-                    curriculumId={selectedCurriculum.id} 
-                    language={selectedCurriculum.language}
-                    token={token || ''}
-                  />
-                </div>
-                {/* 4. Progress Over Time */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <ProgressOverTimeChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
-                      feedbacks={filteredFeedbacks.map(f => ({
-                        timestamp: f.created_at || f.timestamp,
-                        mistakes: f.mistakes
-                      }))}
-                    />
-                  </div>
-                </div>
-                {/* 5. Language Feature Analysis */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Language Features</h3>
-                  <div className="flex-1 overflow-y-auto">
-                    <LanguageFeaturesHeatmap 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-                {/* 6. Context Performance */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <ScaledMistakesPerConversationChart feedbacks={filteredFeedbacks} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <ProgressSection 
+          selectedCurriculum={selectedCurriculum}
+          feedbackLoading={feedbackLoading}
+          feedbackError={feedbackError}
+          filteredFeedbacks={filteredFeedbacks}
+          knowledgeRefreshKey={knowledgeRefreshKey}
+          token={token}
+        />
       )}
 
-      {/* AI Insights Section */}
-      {selectedCurriculum && token && (
-        <div className="mt-8">
-          <h2 className="text-2xl font-bold mb-6 text-orange-600">AI Learning Insights</h2>
-          <AIInsightsSection 
-            curriculumId={selectedCurriculum.id}
-            token={token}
-            language={selectedCurriculum.language}
-          />
-        </div>
-      )}
+
 
       {/* Add Curriculum Modal */}
       <Transition.Root show={showAdd} as={Fragment}>
