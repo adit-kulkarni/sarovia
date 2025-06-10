@@ -23,6 +23,9 @@ import re
 from openai import AsyncOpenAI
 import warnings
 from supabase import create_client, Client
+import numpy as np
+from collections import defaultdict, Counter
+import spacy
 
 # Import the optimized lesson summary
 from optimized_lesson_summary import get_lesson_summary_optimized
@@ -3436,6 +3439,602 @@ async def create_verb_knowledge_snapshot(user_id: str, language: str, curriculum
     except Exception as e:
         logging.error(f"Error creating verb knowledge snapshot: {e}")
         return False
+
+class InsightCard(BaseModel):
+    id: str
+    message: str
+    type: str
+    severity: str
+    trend: str
+    action: str
+    chart_type: str
+    chart_data: dict
+    examples: Optional[List[dict]] = None
+    improvement_percentage: Optional[float] = None
+
+class InsightsResponse(BaseModel):
+    insights: List[InsightCard]
+    last_updated: datetime
+    analysis_period: str
+    summary: dict
+
+async def analyze_feedback_patterns(user_id: str, curriculum_id: str, days: int = 30) -> dict:
+    """Analyze user's feedback patterns over the specified time period"""
+    end_date = datetime.now(timezone.utc)
+    start_date = end_date - timedelta(days=days)
+    
+    # Get feedback data
+    feedback_result = supabase.table('message_feedback') \
+        .select('*, messages!inner(*, conversations!inner(*))') \
+        .eq('messages.conversations.user_id', user_id) \
+        .eq('messages.conversations.curriculum_id', curriculum_id) \
+        .gte('created_at', start_date.isoformat()) \
+        .execute()
+    
+    logging.info(f"Feedback query returned {len(feedback_result.data)} records for user {user_id}, curriculum {curriculum_id}, since {start_date.isoformat()}")
+    
+    if not feedback_result.data:
+        logging.info(f"No feedback data found for user {user_id}, curriculum {curriculum_id}")
+        return {}
+    
+    # Process feedback data
+    mistake_patterns = defaultdict(lambda: {'count': 0, 'examples': [], 'conversations': set(), 'trend_data': []})
+    conversation_quality = {'total_messages': 0, 'total_conversations': 0, 'mistake_free_conversations': 0}
+    time_based_data = defaultdict(list)
+    
+    for feedback in feedback_result.data:
+        conversation_id = feedback['messages']['conversation_id']
+        
+        # Handle datetime parsing with potential microseconds issues
+        created_at_str = feedback['created_at'].replace('Z', '+00:00')
+        try:
+            created_at = datetime.fromisoformat(created_at_str)
+        except ValueError:
+            # Handle irregular microseconds format by padding or truncating to 6 digits
+            import re
+            # Find microseconds part and fix it
+            match = re.search(r'\.(\d+)\+', created_at_str)
+            if match:
+                microseconds = match.group(1)
+                # Pad or truncate to exactly 6 digits
+                fixed_microseconds = microseconds.ljust(6, '0')[:6]
+                created_at_str = re.sub(r'\.(\d+)\+', f'.{fixed_microseconds}+', created_at_str)
+            created_at = datetime.fromisoformat(created_at_str)
+        
+        # Track conversation quality
+        conversation_quality['total_messages'] += 1
+        conversation_quality['total_conversations'] = len(set(f['messages']['conversation_id'] for f in feedback_result.data))
+        
+        # Process mistakes
+        for mistake in feedback.get('mistakes', []):
+            pattern_key = f"{mistake['category']}_{mistake['type']}"
+            mistake_patterns[pattern_key]['count'] += 1
+            mistake_patterns[pattern_key]['conversations'].add(conversation_id)
+            mistake_patterns[pattern_key]['examples'].append({
+                'error': mistake['error'],
+                'correction': mistake['correction'],
+                'explanation': mistake['explanation'],
+                'severity': mistake['severity'],
+                'date': created_at.date().isoformat()
+            })
+            
+            # Track time-based data for trends
+            week_key = created_at.strftime('%Y-W%U')
+            time_based_data[pattern_key].append({
+                'week': week_key,
+                'date': created_at,
+                'severity': mistake['severity']
+            })
+    
+    # Calculate trends
+    for pattern_key in mistake_patterns:
+        pattern_data = time_based_data[pattern_key]
+        if len(pattern_data) >= 2:
+            # Simple trend calculation: compare first half vs second half
+            pattern_data.sort(key=lambda x: x['date'])
+            mid_point = len(pattern_data) // 2
+            first_half = len(pattern_data[:mid_point])
+            second_half = len(pattern_data[mid_point:])
+            
+            if second_half > first_half * 1.2:
+                trend = 'increasing'
+            elif second_half < first_half * 0.8:
+                trend = 'decreasing'
+            else:
+                trend = 'stable'
+            
+            mistake_patterns[pattern_key]['trend'] = trend
+        else:
+            mistake_patterns[pattern_key]['trend'] = 'stable'
+    
+    # Convert sets to counts for serialization
+    for pattern in mistake_patterns.values():
+        pattern['conversation_count'] = len(pattern['conversations'])
+        pattern['conversations'] = list(pattern['conversations'])
+    
+    return {
+        'mistake_patterns': dict(mistake_patterns),
+        'conversation_quality': conversation_quality,
+        'analysis_period': f"{days} days",
+        'total_feedback_items': len(feedback_result.data)
+    }
+
+async def generate_insight_cards(patterns_data: dict, user_id: str, language: str) -> List[InsightCard]:
+    """Generate conversational insight cards using AI"""
+    if not patterns_data or not patterns_data.get('mistake_patterns'):
+        return []
+    
+    # Get user's current level for context
+    try:
+        user_result = supabase.table('users').select('*').eq('id', user_id).execute()
+        user_level = user_result.data[0].get('level', 'B1') if user_result.data else 'B1'
+    except:
+        user_level = 'B1'
+    
+    client = AsyncOpenAI(api_key=API_KEY)
+    
+    # Prepare patterns for AI analysis
+    top_patterns = sorted(
+        patterns_data['mistake_patterns'].items(),
+        key=lambda x: x[1]['count'],
+        reverse=True
+    )[:5]  # Top 5 patterns
+    
+    patterns_summary = []
+    for pattern_key, data in top_patterns:
+        category, mistake_type = pattern_key.split('_', 1)
+        patterns_summary.append({
+            'category': category,
+            'type': mistake_type.replace('_', ' '),
+            'frequency': data['count'],
+            'conversations_affected': data['conversation_count'],
+            'trend': data['trend'],
+            'recent_example': data['examples'][-1] if data['examples'] else None
+        })
+    
+    prompt = f"""
+    Generate 3-5 conversational insight cards for a {language} language learner (level: {user_level}).
+    Based on their recent feedback data, create encouraging but actionable insights.
+    
+    Learning Data:
+    - Total conversations: {patterns_data['conversation_quality']['total_conversations']}
+    - Total messages analyzed: {patterns_data['conversation_quality']['total_messages']}
+    - Analysis period: {patterns_data['analysis_period']}
+    
+    Top Mistake Patterns:
+    {json.dumps(patterns_summary, indent=2)}
+    
+    For each insight, provide:
+    1. A conversational message (friendly, encouraging, specific)
+    2. The insight type (grammar_pattern, vocabulary_growth, progress_trend, etc.)
+    3. Severity (low, moderate, high)
+    4. Trend (increasing, decreasing, stable)
+    5. Suggested action
+    6. Appropriate chart type (frequency_over_time, category_comparison, progress_trend)
+    
+    Guidelines:
+    - Mix improvement areas with positive progress
+    - Be specific about mistakes (e.g., "ser vs estar confusion" not just "grammar")
+    - Use emojis sparingly and appropriately
+    - Keep messages under 100 characters
+    - Focus on actionable insights
+    
+    Return as JSON array of insight objects.
+    """
+    
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        
+        try:
+            content = response.choices[0].message.content
+            # Try to extract JSON if it's wrapped in markdown code blocks
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
+            
+            ai_insights = json.loads(content)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse AI response as JSON: {e}")
+            logging.error(f"AI response content: {response.choices[0].message.content}")
+            return []
+        
+        # Convert AI insights to InsightCard objects with chart data
+        insight_cards = []
+        for i, insight in enumerate(ai_insights):
+            chart_data = await generate_chart_data_for_insight(
+                insight, patterns_data, top_patterns
+            )
+            
+            card = InsightCard(
+                id=str(uuid.uuid4()),
+                message=insight.get('message', ''),
+                type=insight.get('type', 'general'),
+                severity=insight.get('severity', 'moderate'),
+                trend=insight.get('trend', 'stable'),
+                action=insight.get('action', ''),
+                chart_type=insight.get('chart_type', 'frequency_over_time'),
+                chart_data=chart_data,
+                examples=insight.get('examples', []),
+                improvement_percentage=insight.get('improvement_percentage')
+            )
+            insight_cards.append(card)
+        
+        return insight_cards
+        
+    except Exception as e:
+        logging.error(f"Error generating insights: {e}")
+        return []
+
+async def generate_chart_data_for_insight(insight: dict, patterns_data: dict, top_patterns: list) -> dict:
+    """Generate appropriate chart data for each insight"""
+    chart_type = insight.get('chart_type', 'frequency_over_time')
+    
+    if chart_type == 'frequency_over_time':
+        # Find the most relevant pattern for this insight
+        relevant_pattern = None
+        for pattern_key, data in top_patterns:
+            if any(word in insight['message'].lower() for word in pattern_key.lower().split('_')):
+                relevant_pattern = data
+                break
+        
+        if relevant_pattern:
+            # Create weekly frequency data
+            examples = relevant_pattern['examples']
+            weekly_data = defaultdict(int)
+            for example in examples:
+                week = datetime.fromisoformat(example['date']).strftime('%Y-W%U')
+                weekly_data[week] += 1
+            
+            sorted_weeks = sorted(weekly_data.keys())
+            return {
+                'labels': [f"Week {w.split('-W')[1]}" for w in sorted_weeks],
+                'data': [weekly_data[w] for w in sorted_weeks],
+                'type': 'line'
+            }
+    
+    elif chart_type == 'category_comparison':
+        # Compare mistake categories
+        category_counts = defaultdict(int)
+        for pattern_key, data in top_patterns:
+            category = pattern_key.split('_')[0]
+            category_counts[category] += data['count']
+        
+        return {
+            'labels': list(category_counts.keys()),
+            'data': list(category_counts.values()),
+            'type': 'bar'
+        }
+    
+    elif chart_type == 'progress_trend':
+        # Show overall progress trend
+        total_conversations = patterns_data['conversation_quality']['total_conversations']
+        total_mistakes = sum(data['count'] for _, data in top_patterns)
+        
+        return {
+            'labels': ['Mistakes per Conversation'],
+            'data': [total_mistakes / max(total_conversations, 1)],
+            'target': 2.0,  # Target fewer than 2 mistakes per conversation
+            'type': 'gauge'
+        }
+    
+    # Default empty chart data
+    return {'labels': [], 'data': [], 'type': 'line'}
+
+@app.get("/api/insights", response_model=InsightsResponse)
+async def get_user_insights(
+    curriculum_id: str = Query(...),
+    days: int = Query(default=30),
+    token: str = Query(...)
+):
+    """Get AI-generated insights for user's language learning progress"""
+    try:
+        # Verify JWT token
+        payload = verify_jwt(token)
+        user_id = payload['sub']
+        
+        logging.info(f"Getting insights for user {user_id}, curriculum {curriculum_id}")
+        
+        # Get curriculum to determine language
+        curriculum_result = supabase.table('curriculums') \
+            .select('language') \
+            .eq('id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        if not curriculum_result.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        language = curriculum_result.data[0]['language']
+        logging.info(f"Curriculum language: {language}")
+        
+        # Analyze feedback patterns
+        patterns_data = await analyze_feedback_patterns(user_id, curriculum_id, days)
+        logging.info(f"Patterns data: {patterns_data}")
+        
+        if not patterns_data:
+            # Return empty insights for new users
+            return InsightsResponse(
+                insights=[],
+                last_updated=datetime.now(timezone.utc),
+                analysis_period=f"{days} days",
+                summary={
+                    'total_patterns': 0,
+                    'total_conversations': 0,
+                    'improvement_areas': 0
+                }
+            )
+        
+        # Generate AI insights
+        insight_cards = await generate_insight_cards(patterns_data, user_id, language)
+        logging.info(f"Generated {len(insight_cards)} insight cards")
+        
+        # Create summary
+        summary = {
+            'total_patterns': len(patterns_data.get('mistake_patterns', {})),
+            'total_conversations': patterns_data.get('conversation_quality', {}).get('total_conversations', 0),
+            'improvement_areas': len([card for card in insight_cards if card.severity in ['moderate', 'high']])
+        }
+        
+        return InsightsResponse(
+            insights=insight_cards,
+            last_updated=datetime.now(timezone.utc),
+            analysis_period=f"{days} days",
+            summary=summary
+        )
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT token error: {e}")
+        raise HTTPException(status_code=401, detail="Session expired. Please refresh the page and try again.")
+    except Exception as e:
+        logging.error(f"Error generating insights: {e}")
+        import traceback
+        logging.error(f"Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate insights: {str(e)}")
+
+@app.get("/api/insights/debug-curriculums")
+async def debug_curriculums():
+    """Debug endpoint to show available curriculums"""
+    try:
+        # Get all curriculums to see valid IDs
+        curriculum_result = supabase.table('curriculums') \
+            .select('id, user_id, language, created_at') \
+            .execute()
+        
+        return {
+            'total_curriculums': len(curriculum_result.data),
+            'curriculums': curriculum_result.data
+        }
+        
+    except Exception as e:
+        import traceback
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+@app.get("/api/insights/debug-simple")
+async def debug_insights_simple(curriculum_id: str = Query(...)):
+    """Simple debug endpoint without JWT verification"""
+    try:
+        # For debugging, let's check data for your specific curriculum
+        # Get curriculum info first
+        curriculum_result = supabase.table('curriculums') \
+            .select('user_id, language') \
+            .eq('id', curriculum_id) \
+            .execute()
+        
+        if not curriculum_result.data:
+            return {'error': 'Curriculum not found', 'curriculum_id': curriculum_id}
+        
+        user_id = curriculum_result.data[0]['user_id']
+        language = curriculum_result.data[0]['language']
+        
+        # Check feedback data for this curriculum
+        feedback_result = supabase.table('message_feedback') \
+            .select('*, messages!inner(*, conversations!inner(*))') \
+            .eq('messages.conversations.user_id', user_id) \
+            .eq('messages.conversations.curriculum_id', curriculum_id) \
+            .execute()
+        
+        feedback_with_mistakes = []
+        total_mistakes = 0
+        mistake_categories = {}
+        
+        for feedback in feedback_result.data:
+            mistakes = feedback.get('mistakes', [])
+            if mistakes and len(mistakes) > 0:
+                feedback_with_mistakes.append({
+                    'message_id': feedback['message_id'],
+                    'created_at': feedback['created_at'],
+                    'mistake_count': len(mistakes),
+                    'mistakes_sample': mistakes[:2]
+                })
+                total_mistakes += len(mistakes)
+                
+                for mistake in mistakes:
+                    category = mistake.get('category', 'unknown')
+                    mistake_categories[category] = mistake_categories.get(category, 0) + 1
+        
+        return {
+            'curriculum_id': curriculum_id,
+            'user_id': user_id,
+            'language': language,
+            'total_feedback_records': len(feedback_result.data),
+            'feedback_with_mistakes': len(feedback_with_mistakes),
+            'total_mistakes': total_mistakes,
+            'mistake_categories': mistake_categories,
+            'feedback_samples': feedback_with_mistakes[:5],
+            'has_sufficient_data': len(feedback_with_mistakes) >= 3
+        }
+        
+    except Exception as e:
+        import traceback
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+@app.get("/api/insights/debug")
+async def debug_insights_data(
+    curriculum_id: str = Query(...),
+    token: str = Query(...)
+):
+    """Debug endpoint to check what feedback data exists"""
+    try:
+        # Handle token format issues
+        if not token or len(token.split('.')) != 3:
+            return {'error': 'Invalid token format', 'token_segments': len(token.split('.')) if token else 0}
+        
+        # Verify JWT token
+        payload = verify_jwt(token)
+        user_id = payload['sub']
+        
+        # Get curriculum info
+        curriculum_result = supabase.table('curriculums') \
+            .select('language') \
+            .eq('id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        if not curriculum_result.data:
+            return {'error': 'Curriculum not found'}
+        
+        language = curriculum_result.data[0]['language']
+        
+        # Get feedback with joined data for this user and language
+        feedback_result = supabase.table('message_feedback') \
+            .select('*, messages!inner(*, conversations!inner(*))') \
+            .eq('messages.conversations.user_id', user_id) \
+            .eq('messages.conversations.curriculum_id', curriculum_id) \
+            .execute()
+        
+        feedback_with_mistakes = []
+        total_mistakes = 0
+        mistake_categories = {}
+        
+        for feedback in feedback_result.data:
+            mistakes = feedback.get('mistakes', [])
+            if mistakes and len(mistakes) > 0:
+                feedback_with_mistakes.append({
+                    'message_id': feedback['message_id'],
+                    'created_at': feedback['created_at'],
+                    'mistake_count': len(mistakes),
+                    'mistakes_sample': mistakes[:2]  # First 2 mistakes
+                })
+                total_mistakes += len(mistakes)
+                
+                # Count by category
+                for mistake in mistakes:
+                    category = mistake.get('category', 'unknown')
+                    mistake_categories[category] = mistake_categories.get(category, 0) + 1
+        
+        return {
+            'user_id': user_id,
+            'curriculum_id': curriculum_id,
+            'language': language,
+            'total_feedback_records': len(feedback_result.data),
+            'feedback_with_mistakes': len(feedback_with_mistakes),
+            'total_mistakes': total_mistakes,
+            'mistake_categories': mistake_categories,
+            'feedback_samples': feedback_with_mistakes[:5],  # First 5
+            'raw_query_result_count': len(feedback_result.data),
+            'has_sufficient_data': len(feedback_with_mistakes) >= 3
+        }
+        
+    except Exception as e:
+        logging.error(f"Debug error: {e}")
+        import traceback
+        logging.error(f"Full traceback: {traceback.format_exc()}")
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+@app.get("/api/insights/demo", response_model=InsightsResponse)
+async def get_demo_insights(language: str = Query(default="es")):
+    """Get demo insights for testing purposes"""
+    demo_insights = [
+        InsightCard(
+            id="demo-1",
+            message="You've been mixing up 'ser' and 'estar' in 8 out of 10 conversations 🤔",
+            type="grammar_pattern",
+            severity="moderate",
+            trend="stable",
+            action="Practice the fundamental differences between ser (permanent) and estar (temporary)",
+            chart_type="frequency_over_time",
+            chart_data={
+                "labels": ["Week 1", "Week 2", "Week 3", "Week 4"],
+                "data": [3, 2, 4, 1],
+                "type": "line"
+            },
+            examples=[
+                {
+                    "error": "Mi hermana está doctora",
+                    "correction": "Mi hermana es doctora",
+                    "explanation": "Use 'ser' for permanent characteristics like professions",
+                    "date": "2024-01-15"
+                },
+                {
+                    "error": "El café es caliente",
+                    "correction": "El café está caliente",
+                    "explanation": "Use 'estar' for temporary states like temperature",
+                    "date": "2024-01-16"
+                }
+            ]
+        ),
+        InsightCard(
+            id="demo-2",
+            message="Your past tense conjugations have improved 40% this month! 🌟",
+            type="progress_trend",
+            severity="low",
+            trend="decreasing",
+            action="Keep practicing past tense verbs to maintain your progress",
+            chart_type="progress_trend",
+            chart_data={
+                "labels": ["Past Tense Accuracy"],
+                "data": [85],
+                "target": 90,
+                "type": "gauge"
+            },
+            improvement_percentage=40
+        ),
+        InsightCard(
+            id="demo-3",
+            message="You learned 15 new words this week but only used 3 in conversations 💭",
+            type="vocabulary_usage",
+            severity="moderate",
+            trend="stable",
+            action="Try to actively use new vocabulary words in your next conversation",
+            chart_type="category_comparison",
+            chart_data={
+                "labels": ["Words Learned", "Words Used"],
+                "data": [15, 3],
+                "type": "bar"
+            }
+        ),
+        InsightCard(
+            id="demo-4",
+            message="Your subjunctive mood usage is getting stronger! 💪",
+            type="grammar_improvement",
+            severity="low",
+            trend="improving",
+            action="Continue practicing with complex sentence structures",
+            chart_type="frequency_over_time",
+            chart_data={
+                "labels": ["Week 1", "Week 2", "Week 3", "Week 4"],
+                "data": [1, 2, 3, 5],
+                "type": "line"
+            },
+            improvement_percentage=25
+        )
+    ]
+    
+    return InsightsResponse(
+        insights=demo_insights,
+        last_updated=datetime.now(timezone.utc),
+        analysis_period="30 days",
+        summary={
+            "total_patterns": 8,
+            "total_conversations": 12,
+            "improvement_areas": 2
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn

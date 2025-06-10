@@ -183,6 +183,134 @@ const supabaseClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+// AI Insights Component
+const AIInsightsSection = ({ curriculumId, token, language }: { 
+  curriculumId: string; 
+  token: string; 
+  language: string; 
+}) => {
+  const [insights, setInsights] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchInsights = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // Only fetch real insights - no demo fallback
+        const response = await fetch(`${API_BASE}/api/insights?curriculum_id=${curriculumId}&days=30&token=${token}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          setInsights(data);
+        } else {
+          throw new Error(`Failed to fetch insights: ${response.status}`);
+        }
+      } catch (err) {
+        console.error('Error fetching insights:', err);
+        setError('Failed to load insights from your conversation data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (curriculumId && token) {
+      fetchInsights();
+    }
+  }, [curriculumId, token, language]);
+
+  if (loading) {
+    return (
+      <div className="animate-pulse space-y-4">
+        <div className="h-32 bg-gray-200 rounded"></div>
+        <div className="h-32 bg-gray-200 rounded"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <p className="text-red-600">{error}</p>
+      </div>
+    );
+  }
+
+  if (!insights || !insights.insights || insights.insights.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <div className="text-4xl mb-4">🔍</div>
+        <h3 className="text-lg font-semibold text-gray-700 mb-2">No Insights Available Yet</h3>
+        <p className="text-gray-600 mb-4">
+          You need more conversation feedback data to generate AI insights. Have a few more conversations 
+          and come back to see personalized analysis of your learning patterns.
+        </p>
+        <div className="text-sm text-gray-500">
+          <p>• Minimum: 5-10 conversations with feedback</p>
+          <p>• Better insights: 20+ conversations over several days</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+        <h3 className="font-semibold text-orange-800 mb-2">Analysis Summary</h3>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_conversations}</div>
+            <div className="text-orange-700">Conversations Analyzed</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_patterns}</div>
+            <div className="text-orange-700">Patterns Identified</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.analysis_period}</div>
+            <div className="text-orange-700">Analysis Period</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Insights Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {insights.insights.map((insight: any) => (
+          <div
+            key={insight.id}
+            className={`border rounded-lg p-4 transition-all duration-200 hover:shadow-md ${
+              insight.severity === 'high' ? 'border-red-200 bg-red-50' :
+              insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
+              'border-green-200 bg-green-50'
+            }`}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-gray-800 font-medium flex-1">{insight.message}</p>
+              <span className="text-xl ml-2">
+                {insight.trend === 'improving' ? '↗' : insight.trend === 'stable' ? '→' : '↘'}
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
+              <span className="capitalize">{insight.trend}</span>
+              <span>•</span>
+              <span className="capitalize">{insight.severity} priority</span>
+            </div>
+            
+            <div className="bg-blue-100 p-3 rounded">
+              <h4 className="font-medium text-blue-800 mb-1">Suggested Action</h4>
+              <p className="text-blue-700 text-sm">{insight.action}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const Dashboard = () => {
   const [curriculums, setCurriculums] = useState<Curriculum[]>([]);
   const [selectedCurriculum, setSelectedCurriculum] = useState<Curriculum | null>(null);
@@ -212,6 +340,8 @@ const Dashboard = () => {
   const [showCompletedLessons, setShowCompletedLessons] = useState(false);
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
   const router = useRouter();
 
   const user = useUser();
@@ -825,6 +955,18 @@ const Dashboard = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* AI Insights Section */}
+      {selectedCurriculum && token && (
+        <div className="mt-8">
+          <h2 className="text-2xl font-bold mb-6 text-orange-600">AI Learning Insights</h2>
+          <AIInsightsSection 
+            curriculumId={selectedCurriculum.id}
+            token={token}
+            language={selectedCurriculum.language}
+          />
         </div>
       )}
 
