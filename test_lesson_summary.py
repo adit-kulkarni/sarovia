@@ -32,6 +32,22 @@ def test_lesson_summary():
                 "icon": "📝",
                 "type": "milestone",
                 "value": "145 words"
+            },
+            {
+                "id": "new_verb_explore",
+                "title": "New Verb Explorer! 🆕",
+                "description": "Used a new verb for the first time",
+                "icon": "🌟",
+                "type": "new",
+                "value": "explore"
+            },
+            {
+                "id": "new_tense_go_past",
+                "title": "Tense Master! ⏰",
+                "description": "Used an existing verb in a new tense",
+                "icon": "🎯",
+                "type": "improved",
+                "value": "go (Past)"
             }
         ],
         "mistakesByCategory": [
@@ -73,10 +89,14 @@ def test_lesson_summary():
     print("\nAchievement types:")
     print("🏃‍♂️ Marathon Talker - Longest conversation")
     print("📚 Wordsmith - Used lots of words")
-    print("⚡ Speed Talker - Quick completion")
     print("🔥 Consistent Learner - Multiple lessons this week")
     print("🧩 Complex Speaker - Used complex sentences")
     print("🌟 Getting Started - First lesson completion")
+    print("\nVerb Badge Achievements:")
+    print("🆕 New Verb Explorer - Used a brand new verb")
+    print("⏰ Tense Master - Used existing verb in new tense")
+    print("👥 Person Shifter - Used verb with new grammatical person")
+    print("📚 Verb Collection Milestone - Reached verb count milestones")
     
     print("\nHow to test:")
     print("1. Start a lesson conversation")

@@ -208,6 +208,7 @@ const Dashboard = () => {
   const [showLessonSummary, setShowLessonSummary] = useState(false);
   const [lessonSummaryData, setLessonSummaryData] = useState<LessonSummaryData | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [loadingSummaryMap, setLoadingSummaryMap] = useState<Record<string, boolean>>({});
   const [showCompletedLessons, setShowCompletedLessons] = useState(false);
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const router = useRouter();
@@ -361,6 +362,7 @@ const Dashboard = () => {
   const handleViewReportCard = async (lessonId: string) => {
     if (!selectedCurriculum || !token) return;
     
+    setLoadingSummaryMap(prev => ({ ...prev, [lessonId]: true }));
     setLoadingSummary(true);
     try {
       // Get the progress ID for this lesson
@@ -392,6 +394,7 @@ const Dashboard = () => {
       console.error('[View Report Card] Error:', error);
       alert('Failed to load report card. Please try again.');
     } finally {
+      setLoadingSummaryMap(prev => ({ ...prev, [lessonId]: false }));
       setLoadingSummary(false);
     }
   };
@@ -527,16 +530,20 @@ const Dashboard = () => {
         </h2>
         <div className="px-10">
           {(() => {
-            // Separate lessons by completion status
-            const activeLessons = lessonTemplates.slice(0, displayedLessonsCount).filter(lesson => {
+            // Get ALL completed lessons (not limited)
+            const allCompletedLessons = lessonTemplates.filter(lesson => {
+              const progress = lesson.progress;
+              return progress?.status === 'completed';
+            });
+            
+            // Get all active lessons (not started + in progress)
+            const allActiveLessons = lessonTemplates.filter(lesson => {
               const progress = lesson.progress;
               return progress?.status !== 'completed';
             });
             
-            const completedLessons = lessonTemplates.slice(0, displayedLessonsCount).filter(lesson => {
-              const progress = lesson.progress;
-              return progress?.status === 'completed';
-            });
+            // Limit active lessons to displayedLessonsCount for display
+            const displayedActiveLessons = allActiveLessons.slice(0, displayedLessonsCount);
 
             const renderLessonCard = (lesson: any, isCompact = false) => {
               const progress = lesson.progress;
@@ -606,9 +613,9 @@ const Dashboard = () => {
                       <button
                         className={`${isCompact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors bg-blue-500 hover:bg-blue-600 text-white`}
                         onClick={() => handleViewReportCard(lesson.id)}
-                        disabled={loadingSummary}
+                        disabled={loadingSummaryMap[lesson.id]}
                       >
-                        {loadingSummary ? 'Loading...' : '📊 Report Card'}
+                        {loadingSummaryMap[lesson.id] ? 'Loading...' : '📊 Report Card'}
                       </button>
                     )}
                     <button
@@ -631,13 +638,13 @@ const Dashboard = () => {
             return (
               <>
                 {/* Active Lessons (In Progress + Not Started) */}
-                {(activeLessons.length > 0 || lessonTemplates.length > displayedLessonsCount) && (
+                {(displayedActiveLessons.length > 0 || allActiveLessons.length > displayedLessonsCount) && (
                   <div className="mb-8">
                     <div className="flex space-x-6 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
-                      {activeLessons.map(lesson => renderLessonCard(lesson, false))}
+                      {displayedActiveLessons.map(lesson => renderLessonCard(lesson, false))}
                       
                       {/* Load More Card - appears inline with lesson cards */}
-                      {lessonTemplates.length > displayedLessonsCount && (
+                      {allActiveLessons.length > displayedLessonsCount && (
                         <div
                           className="flex flex-col justify-center items-center min-w-[320px] max-w-[340px] bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl shadow-lg border-2 border-dashed border-orange-300 p-8 cursor-pointer hover:border-orange-500 hover:bg-gradient-to-br hover:from-orange-100 hover:to-orange-200 transition-all duration-200 group"
                           style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
@@ -651,7 +658,7 @@ const Dashboard = () => {
                           <div className="text-center">
                             <div className="text-lg font-bold text-orange-800 mb-2">Load More Lessons</div>
                             <div className="text-sm text-orange-600">
-                              {lessonTemplates.length - displayedLessonsCount} more lessons available
+                              {allActiveLessons.length - displayedLessonsCount} more lessons available
                             </div>
                           </div>
                         </div>
@@ -661,7 +668,7 @@ const Dashboard = () => {
                 )}
                 
                 {/* Completed Lessons - Collapsible Section */}
-                {completedLessons.length > 0 && (
+                {allCompletedLessons.length > 0 && (
                   <div className="mb-4">
                     <button
                       onClick={() => setShowCompletedLessons(!showCompletedLessons)}
@@ -674,7 +681,7 @@ const Dashboard = () => {
                           </div>
                           <div className="text-left">
                             <h3 className="text-lg font-bold text-green-800">
-                              Completed Lessons ({completedLessons.length})
+                              Completed Lessons ({allCompletedLessons.length})
                             </h3>
                             <p className="text-sm text-green-600">
                               Great job! Click to view your completed lessons
@@ -692,7 +699,7 @@ const Dashboard = () => {
                     {/* Expanded Completed Lessons */}
                     {showCompletedLessons && (
                       <div className="flex space-x-4 overflow-x-auto pb-2 bg-green-50/50 rounded-xl p-4 border border-green-200" style={{ WebkitOverflowScrolling: 'touch' }}>
-                        {completedLessons.map(lesson => renderLessonCard(lesson, true))}
+                        {allCompletedLessons.map(lesson => renderLessonCard(lesson, true))}
                       </div>
                     )}
                   </div>

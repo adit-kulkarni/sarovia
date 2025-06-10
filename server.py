@@ -2769,8 +2769,8 @@ async def get_lesson_summary(progress_id: str, token: str = Query(...)):
         # Calculate word count
         total_words = sum(len(msg['content'].split()) for msg in user_messages)
         
-        # Generate achievements
-        achievements = await generate_achievements(user_id, progress_data, user_messages, total_words, duration)
+        # Generate achievements (including verb badges)
+        achievements = await generate_achievements(user_id, progress_data, user_messages, total_words, duration, conversation_data['id'])
         
         # Extract new vocabulary (simplified - you could enhance this with NLP)
         new_vocabulary = []
@@ -2813,7 +2813,170 @@ async def get_lesson_summary(progress_id: str, token: str = Query(...)):
         logging.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def generate_achievements(user_id: str, progress_data: dict, user_messages: list, total_words: int, duration: timedelta) -> list:
+async def generate_verb_badge_achievements(user_id: str, conversation_id: str, curriculum_id: str) -> list:
+    """Generate verb badge achievements by comparing before/after knowledge states"""
+    achievements = []
+    
+    try:
+        logging.info(f"[Verb Badges] Analyzing verb achievements for user {user_id}")
+        
+        # Get curriculum language
+        curriculum = supabase.table('curriculums').select('language').eq('id', curriculum_id).execute()
+        if not curriculum.data:
+            logging.warning("[Verb Badges] Could not find curriculum")
+            return achievements
+        
+        language = curriculum.data[0]['language']
+        
+        # Step 1: Get CURRENT knowledge (after lesson analysis)
+        current_knowledge_record = supabase.table('user_knowledge').select('knowledge_json, analyzed_conversations').eq('user_id', user_id).eq('language', language).execute()
+        if not current_knowledge_record.data:
+            logging.info("[Verb Badges] No knowledge record found")
+            return []
+        
+        current_knowledge = current_knowledge_record.data[0].get('knowledge_json', {})
+        current_verbs = current_knowledge.get('verbs', {})
+        analyzed_conversations = current_knowledge_record.data[0].get('analyzed_conversations', [])
+        
+        # Step 2: Determine if this conversation was just analyzed
+        if conversation_id not in analyzed_conversations:
+            logging.info("[Verb Badges] This conversation hasn't been analyzed yet")
+            return []
+        
+        # Step 3: Reconstruct BEFORE state by re-analyzing without this conversation
+        before_conversations = [conv_id for conv_id in analyzed_conversations if conv_id != conversation_id]
+        if not before_conversations:
+            # This was the first conversation - everything is new!
+            logging.info("[Verb Badges] First conversation - awarding new verb discoveries")
+            for verb_lemma, tenses in current_verbs.items():
+                achievements.append({
+                    'id': f'new_verb_{verb_lemma}',
+                    'title': 'New Verb Explorer! 🆕',
+                    'description': f'Used your first verb: {verb_lemma}',
+                    'icon': '🌟',
+                    'type': 'new',
+                    'value': verb_lemma,
+                    'category': 'major'  # Add category for frontend grouping
+                })
+            return achievements
+        
+        # Step 4: Get BEFORE knowledge by re-analyzing previous conversations
+        before_knowledge = await analyze_conversations_incrementally(user_id, language, before_conversations)
+        if not before_knowledge:
+            logging.warning("[Verb Badges] Could not reconstruct before state")
+            return []
+        
+        before_verbs = before_knowledge.get('verbs', {})
+        
+        # Step 5: Compare BEFORE vs AFTER to find discoveries
+        major_discoveries = []  # New verbs, new tenses
+        minor_discoveries = []  # New persons
+        
+        for verb_lemma, current_tenses in current_verbs.items():
+            if verb_lemma not in before_verbs:
+                # MAJOR: Completely new verb
+                major_discoveries.append({
+                    'type': 'new_verb',
+                    'verb': verb_lemma,
+                    'title': f'New Verb Explorer! 🆕',
+                    'description': f'Used a brand new verb',
+                    'value': verb_lemma
+                })
+                logging.info(f"[Verb Badges] New verb discovered: {verb_lemma}")
+            else:
+                # Verb exists - check for new tenses and persons
+                before_tenses = before_verbs[verb_lemma]
+                
+                for tense, current_persons in current_tenses.items():
+                    if tense not in before_tenses:
+                        # MAJOR: New tense for existing verb
+                        major_discoveries.append({
+                            'type': 'new_tense',
+                            'verb': verb_lemma,
+                            'tense': tense,
+                            'title': f'Tense Master! ⏰',
+                            'description': f'Used existing verb in a new tense',
+                            'value': f'{verb_lemma} ({tense})'
+                        })
+                        logging.info(f"[Verb Badges] New tense: {verb_lemma} in {tense}")
+                    else:
+                        # Check for new persons in existing tense
+                        before_persons = set(before_tenses[tense])
+                        new_persons = set(current_persons) - before_persons
+                        
+                        if new_persons:
+                            # MINOR: New person for existing verb+tense
+                            for person in new_persons:
+                                minor_discoveries.append({
+                                    'type': 'new_person',
+                                    'verb': verb_lemma,
+                                    'tense': tense,
+                                    'person': person,
+                                    'title': f'Person Shifter! 👥',
+                                    'description': f'Used verb with a new grammatical person',
+                                    'value': f'{verb_lemma} ({person})'
+                                })
+                                logging.info(f"[Verb Badges] New person: {verb_lemma} {tense} {person}")
+        
+        # Step 6: Generate achievements for ALL discoveries (no limits)
+        # Award all major discoveries
+        for discovery in major_discoveries:
+            achievements.append({
+                'id': f"{discovery['type']}_{discovery['verb']}_{discovery.get('tense', '')}",
+                'title': discovery['title'],
+                'description': discovery['description'],
+                'icon': '🌟' if discovery['type'] == 'new_verb' else '⏰',
+                'type': 'new' if discovery['type'] == 'new_verb' else 'improved',
+                'value': discovery['value'],
+                'category': 'major'  # Add category for frontend grouping
+            })
+        
+        # Award all minor discoveries
+        for discovery in minor_discoveries:
+            achievements.append({
+                'id': f"{discovery['type']}_{discovery['verb']}_{discovery['tense']}_{discovery['person']}",
+                'title': discovery['title'],
+                'description': discovery['description'],
+                'icon': '👤',
+                'type': 'improved',
+                'value': discovery['value'],
+                'category': 'minor'  # Add category for frontend grouping
+            })
+        
+        # Step 7: Check for milestones
+        total_verbs_now = len(current_verbs)
+        total_verbs_before = len(before_verbs)
+        
+        milestones = [10, 25, 50, 100, 150, 200]
+        for milestone in milestones:
+            if total_verbs_before < milestone <= total_verbs_now:
+                achievements.append({
+                    'id': f'verb_milestone_{milestone}',
+                    'title': f'Verb Collection Milestone! 📚',
+                    'description': f'Reached {milestone} total verbs in your vocabulary',
+                    'icon': '🏆',
+                    'type': 'milestone',
+                    'value': f'{total_verbs_now} verbs',
+                    'category': 'milestone'  # Add category for frontend grouping
+                })
+                break  # Only one milestone per lesson
+        
+        # No limits - let frontend handle organization
+        
+        if achievements:
+            logging.info(f"[Verb Badges] Generated {len(achievements)} verb achievements")
+        
+        return achievements
+        
+    except Exception as e:
+        logging.error(f"[Verb Badges] Error generating achievements: {e}")
+        import traceback
+        logging.error(f"[Verb Badges] Traceback: {traceback.format_exc()}")
+        return []
+
+
+
+async def generate_achievements(user_id: str, progress_data: dict, user_messages: list, total_words: int, duration: timedelta, conversation_id: str = None) -> list:
     """Generate achievements based on lesson performance"""
     achievements = []
     
@@ -2827,6 +2990,13 @@ async def generate_achievements(user_id: str, progress_data: dict, user_messages
         current_duration_minutes = duration.total_seconds() / 60
         
         logging.info(f"[Achievements] Current turns: {current_turns}, duration: {current_duration_minutes:.1f}m")
+        
+        # Verb Badge Achievements - use knowledge analysis results
+        if conversation_id:
+            curriculum_id = progress_data.get('curriculum_id')
+            if curriculum_id:
+                verb_achievements = await generate_verb_badge_achievements(user_id, conversation_id, curriculum_id)
+                achievements.extend(verb_achievements)
         
         # Achievement 1: Longest conversation
         if all_progress.data:
@@ -2862,19 +3032,7 @@ async def generate_achievements(user_id: str, progress_data: dict, user_messages
                 'value': f'{total_words} words'
             })
         
-        # Achievement 3: Quick completion
-        required_turns = progress_data.get('required_turns', 7)
-        if current_duration_minutes < 15 and current_turns >= required_turns:
-            achievements.append({
-                'id': 'speed_talker',
-                'title': 'Speed Talker! ⚡',
-                'description': 'Completed the lesson quickly',
-                'icon': '🚀',
-                'type': 'new',
-                'value': f'{int(current_duration_minutes)}m'
-            })
-        
-        # Achievement 4: Consistent practice
+        # Achievement 3: Consistent practice
         recent_lessons = []
         for p in (all_progress.data or []):
             if p.get('completed_at'):
@@ -2919,7 +3077,7 @@ async def generate_achievements(user_id: str, progress_data: dict, user_messages
                 'value': f'{len(recent_lessons)} lessons'
             })
         
-        # Achievement 5: Grammar variety (based on message complexity)
+        # Achievement 4: Grammar variety (based on message complexity)
         complex_sentences = sum(1 for msg in user_messages if len(msg.get('content', '').split()) > 10)
         if complex_sentences >= 3:
             achievements.append({
