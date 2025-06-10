@@ -211,9 +211,23 @@ const Dashboard = () => {
   const [loadingSummaryMap, setLoadingSummaryMap] = useState<Record<string, boolean>>({});
   const [showCompletedLessons, setShowCompletedLessons] = useState(false);
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
+  const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
   const router = useRouter();
 
   const user = useUser();
+
+  // Auto-refresh knowledge data when returning to dashboard
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && selectedCurriculum) {
+        // Trigger refresh of knowledge panel when user returns to dashboard
+        setKnowledgeRefreshKey(prev => prev + 1);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [selectedCurriculum]);
 
   // Fetch JWT token on mount
   useEffect(() => {
@@ -733,7 +747,11 @@ const Dashboard = () => {
               <div className="space-y-6">
                 {/* Your Knowledge Panel as first analytics card */}
                 <div className="bg-white rounded-lg shadow p-6">
-                  <YourKnowledgePanel language={selectedCurriculum.language} level={selectedCurriculum.start_level} />
+                  <YourKnowledgePanel 
+                    language={selectedCurriculum.language} 
+                    level={selectedCurriculum.start_level}
+                    refreshTrigger={knowledgeRefreshKey}
+                  />
                 </div>
                 {/* 1. Mistake Categories Chart */}
                 <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">

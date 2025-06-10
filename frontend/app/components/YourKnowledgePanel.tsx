@@ -53,13 +53,16 @@ function getNextLevel(level: string) {
 interface Props {
   language: string;
   level: string;
+  refreshTrigger?: number;
 }
 
-export default function YourKnowledgePanel({ language, level }: Props) {
+export default function YourKnowledgePanel({ language, level, refreshTrigger }: Props) {
   const [knowledge, setKnowledge] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
   const nextLevel = getNextLevel(level);
   const targets = NEXT_LEVEL_TARGETS[nextLevel] || {};
@@ -84,10 +87,39 @@ export default function YourKnowledgePanel({ language, level }: Props) {
       const res = await fetch(`${API_BASE}/api/user_knowledge?language=${language}&token=${token}`);
       const data = await res.json();
       setKnowledge(data.knowledge);
+      setLastFetch(new Date());
     } catch (e) {
       setError('Failed to fetch knowledge data');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshKnowledge() {
+    setRefreshing(true);
+    setError(null);
+    const token = await getToken();
+    if (!token) {
+      setError('Not authenticated');
+      setRefreshing(false);
+      return;
+    }
+    try {
+      // First trigger an incremental update
+      const updateRes = await fetch(`${API_BASE}/api/user_knowledge/update?language=${language}&token=${token}`, { method: 'POST' });
+      const updateData = await updateRes.json();
+      
+      if (updateData.updated && updateData.knowledge) {
+        setKnowledge(updateData.knowledge);
+        setLastFetch(new Date());
+      } else {
+        // If no update needed, just fetch current data
+        await fetchKnowledge();
+      }
+    } catch (e) {
+      setError('Failed to refresh knowledge data');
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -105,6 +137,7 @@ export default function YourKnowledgePanel({ language, level }: Props) {
       const data = await res.json();
       if (data.knowledge) {
         setKnowledge(data.knowledge);
+        setLastFetch(new Date());
       } else {
         setError(data.error || 'Failed to generate knowledge report');
       }
@@ -120,12 +153,48 @@ export default function YourKnowledgePanel({ language, level }: Props) {
     // eslint-disable-next-line
   }, [language]);
 
+  // Trigger refresh when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger && refreshTrigger > 0 && knowledge) {
+      refreshKnowledge();
+    }
+    // eslint-disable-next-line
+  }, [refreshTrigger]);
+
+  // Auto-refresh knowledge when user returns to the dashboard
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && lastFetch && knowledge) {
+        const timeSinceLastFetch = Date.now() - lastFetch.getTime();
+        // Auto-refresh if it's been more than 2 minutes since last fetch
+        if (timeSinceLastFetch > 2 * 60 * 1000) {
+          refreshKnowledge();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [lastFetch, knowledge]);
+
   if (loading) return <div className="p-8">Loading...</div>;
 
   return (
     <>
       <div className="bg-gray-50 rounded-lg shadow p-6 mb-6 h-[400px] flex flex-col justify-between">
-        <h3 className="text-xl font-semibold mb-4">Your Knowledge</h3>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold">Your Knowledge</h3>
+          {knowledge && (
+            <button
+              className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 transition-colors"
+              onClick={refreshKnowledge}
+              disabled={refreshing || loading}
+              title="Refresh with latest conversation data"
+            >
+              {refreshing ? '🔄' : '↻'} Refresh
+            </button>
+          )}
+        </div>
         {error && <div className="text-red-500 mb-4">{error}</div>}
         {!knowledge && (
           <div className="mb-6">
@@ -175,7 +244,14 @@ export default function YourKnowledgePanel({ language, level }: Props) {
         )}
       </div>
       <div className="bg-gray-50 rounded-lg shadow p-6 h-[400px] flex flex-col">
-        <h4 className="text-lg font-semibold mb-2">Verb Strength Ranking</h4>
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="text-lg font-semibold">Verb Strength Ranking</h4>
+          {lastFetch && (
+            <div className="text-xs text-gray-500">
+              Updated: {lastFetch.toLocaleTimeString()}
+            </div>
+          )}
+        </div>
         {knowledge && (
           <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
             <table className="w-full text-left border">

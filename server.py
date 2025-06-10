@@ -18,6 +18,14 @@ from typing import List, Optional
 import aiohttp
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
+import httpx
+import re
+from openai import AsyncOpenAI
+import warnings
+from supabase import create_client, Client
+
+# Import the optimized lesson summary
+from optimized_lesson_summary import get_lesson_summary_optimized
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -429,6 +437,7 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
     openai_session_confirmed = False
     on_openai_session_created_called = False
     current_turns = initial_turns  # Initialize with existing turn count for continuing conversations
+    user_id = None  # Track user_id for knowledge updates
     logging.info(f"[Handler {handler_id}] Starting with initial_turns={initial_turns}")
     try:
         while True:
@@ -449,7 +458,15 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                 if not on_openai_session_created_called:
                     on_openai_session_created_called = True
                     conversation_id = await on_openai_session_created()
-                    logging.info(f"[Handler {handler_id}] OpenAI session.created confirmed, conversation_id: {conversation_id}")
+                    # Get user_id from conversation for knowledge updates
+                    if conversation_id:
+                        try:
+                            conv_result = supabase.table('conversations').select('user_id').eq('id', conversation_id).execute()
+                            if conv_result.data:
+                                user_id = conv_result.data[0]['user_id']
+                        except Exception as e:
+                            logging.warning(f"[Handler {handler_id}] Could not get user_id for knowledge updates: {e}")
+                    logging.info(f"[Handler {handler_id}] OpenAI session.created confirmed, conversation_id: {conversation_id}, user_id: {user_id}")
                 else:
                     logging.warning(f"[Handler {handler_id}] Duplicate OpenAI session.created event ignored.")
                 # Now send session config and response.create to OpenAI
@@ -498,6 +515,11 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     # Increment turn count when assistant completes response
                     current_turns += 1
                     asyncio.create_task(update_lesson_progress_turns(conversation_id, current_turns, client_ws))
+                    
+                    # Trigger knowledge update every 5 turns for ongoing analysis
+                    if user_id and current_turns % 5 == 0:
+                        logging.info(f"[Handler {handler_id}] Triggering knowledge update after {current_turns} turns")
+                        asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
             # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
@@ -521,6 +543,10 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
+        # Final knowledge update when conversation ends
+        if user_id and conversation_id and current_turns > 0:
+            logging.info(f"[Handler {handler_id}] Triggering final knowledge update for conversation {conversation_id}")
+            asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
         await ws.close()
 
 async def create_conversation(user_id: str, context: str, language: str, level: str, curriculum_id: str) -> str:
@@ -1246,15 +1272,22 @@ async def update_user_knowledge(language: str = Query(...), token: str = Query(.
         user_payload = verify_jwt(token)
         user_id = user_payload["sub"]
         
-        # Get unanalyzed conversations count
+        # Get unanalyzed conversations count before update
         unanalyzed = await get_unanalyzed_conversations(user_id, language)
         
         if not unanalyzed:
+            # Still fetch and return current knowledge even if no update needed
+            result = supabase.table('user_knowledge').select('knowledge_json').eq('user_id', user_id).eq('language', language).execute()
+            current_knowledge = result.data[0]['knowledge_json'] if result.data else None
+            
             return {
                 "updated": True,
                 "message": "Knowledge is already up to date",
-                "conversations_analyzed": 0
+                "conversations_analyzed": 0,
+                "knowledge": current_knowledge
             }
+        
+        logging.info(f"[Knowledge Update] Updating knowledge for user {user_id}, found {len(unanalyzed)} unanalyzed conversations")
         
         # Perform incremental update
         success = await update_user_knowledge_incrementally(user_id, language)
@@ -1262,15 +1295,19 @@ async def update_user_knowledge(language: str = Query(...), token: str = Query(.
         if success:
             # Return updated knowledge
             result = supabase.table('user_knowledge').select('knowledge_json').eq('user_id', user_id).eq('language', language).execute()
+            updated_knowledge = result.data[0]['knowledge_json'] if result.data else None
+            
             return {
                 "updated": True,
                 "conversations_analyzed": len(unanalyzed),
-                "knowledge": result.data[0]['knowledge_json'] if result.data else None
+                "knowledge": updated_knowledge,
+                "message": f"Successfully analyzed {len(unanalyzed)} new conversations"
             }
         else:
             return {
                 "updated": False,
-                "error": "Failed to update knowledge"
+                "error": "Failed to update knowledge",
+                "conversations_analyzed": 0
             }
             
     except Exception as e:
@@ -2494,43 +2531,48 @@ async def complete_lesson(
     request: CompleteLessonRequest,
     token: str = Query(...)
 ):
-    """Mark a lesson as completed and end the conversation"""
+    """Complete a lesson and trigger knowledge update + snapshot creation"""
     try:
         user_payload = verify_jwt(token)
         user_id = user_payload["sub"]
         
-        # Get progress record
-        progress = supabase.table('lesson_progress').select('*').eq('id', request.progress_id).eq('user_id', user_id).execute()
+        progress_id = request.progress_id
         
-        if not progress.data:
+        # Update lesson progress to completed
+        result = supabase.table('lesson_progress').update({
+            'status': 'completed',
+            'completed_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }).eq('id', progress_id).eq('user_id', user_id).execute()
+        
+        if not result.data:
             raise HTTPException(status_code=404, detail="Progress record not found")
         
-        progress_data = progress.data[0]
+        progress_data = result.data[0]
         
-        # Check if minimum turns requirement is met
-        if progress_data['turns_completed'] < progress_data['required_turns']:
-            raise HTTPException(status_code=400, detail="Minimum conversation turns not completed")
+        # Get curriculum and conversation info for the snapshot
+        curriculum_id = progress_data.get('curriculum_id')
+        conversation_id = progress_data.get('conversation_id')
         
-        # Get curriculum info to determine language
-        curriculum_id = progress_data['curriculum_id']
-        curriculum = supabase.table('curriculums').select('language').eq('id', curriculum_id).execute()
-        language = curriculum.data[0]['language'] if curriculum.data else 'en'
+        # Get language from the conversation
+        language = None
+        if conversation_id:
+            conv_result = supabase.table('conversations').select('language').eq('id', conversation_id).execute()
+            if conv_result.data:
+                language = conv_result.data[0]['language']
         
-        # Update progress to completed
-        completed_progress = supabase.table('lesson_progress').update({
-            'status': 'completed',
-            'completed_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', request.progress_id).execute()
+        if language and curriculum_id:
+            # Update user knowledge incrementally
+            logging.info(f"Updating user knowledge for lesson completion: {progress_id}")
+            await update_user_knowledge_incrementally(user_id, language)
+            
+            # Create verb knowledge snapshot for fast report card generation
+            logging.info(f"Creating verb knowledge snapshot for lesson completion: {progress_id}")
+            await create_verb_knowledge_snapshot(
+                user_id, language, curriculum_id, progress_id, conversation_id
+            )
         
-        # Trigger incremental knowledge update in the background
-        # This will analyze any new conversations since the last update
-        asyncio.create_task(update_user_knowledge_incrementally(user_id, language))
-        
-        return {
-            "completed": True,
-            "progress": completed_progress.data[0] if completed_progress.data else None
-        }
+        return {"success": True, "progress": progress_data}
         
     except Exception as e:
         logging.error(f"Error completing lesson: {e}")
@@ -2621,187 +2663,26 @@ async def get_lesson_summary(progress_id: str, token: str = Query(...)):
         
         logging.info(f"[Lesson Summary] Fetching summary for progress_id: {progress_id}, user_id: {user_id}")
         
-        # Get progress record
+        # Verify progress belongs to user
         progress = supabase.table('lesson_progress').select('*').eq('id', progress_id).eq('user_id', user_id).execute()
         
         if not progress.data:
             logging.error(f"[Lesson Summary] Progress record not found for id: {progress_id}")
             raise HTTPException(status_code=404, detail="Progress record not found")
         
-        progress_data = progress.data[0]
-        logging.info(f"[Lesson Summary] Found progress data: {progress_data}")
-        
-        # Get conversation for this lesson
-        conversation_id = progress_data.get('conversation_id')
-        if not conversation_id:
-            # Fallback: try to find conversation by user_id and lesson info
-            logging.warning(f"[Lesson Summary] No conversation_id in progress data, attempting fallback search")
-            conversation_query = supabase.table('conversations').select('id, created_at').eq('user_id', user_id)
-            
-            if progress_data.get('lesson_id'):
-                conversation_query = conversation_query.eq('lesson_id', progress_data['lesson_id'])
-            elif progress_data.get('custom_lesson_id'):
-                conversation_query = conversation_query.eq('custom_lesson_id', progress_data['custom_lesson_id'])
-            else:
-                logging.error(f"[Lesson Summary] No lesson_id or custom_lesson_id in progress data")
-                raise HTTPException(status_code=404, detail="No conversation found for this lesson")
-            
-            conversations = conversation_query.order('created_at', desc=True).limit(1).execute()
-            if not conversations.data:
-                logging.error(f"[Lesson Summary] No conversation found for lesson")
-                raise HTTPException(status_code=404, detail="No conversation found for this lesson")
-            
-            conversation_data = conversations.data[0]
-            conversation_id = conversation_data['id']
-            
-            # Update the progress record with the found conversation_id for future use
-            supabase.table('lesson_progress').update({
-                'conversation_id': conversation_id,
-                'updated_at': datetime.now().isoformat()
-            }).eq('id', progress_id).execute()
-            
-            logging.info(f"[Lesson Summary] Found conversation via fallback: {conversation_id}")
-        else:
-            conversation = supabase.table('conversations').select('id, created_at').eq('id', conversation_id).execute()
-            if not conversation.data:
-                logging.error(f"[Lesson Summary] Conversation not found for id: {conversation_id}")
-                raise HTTPException(status_code=404, detail="Conversation not found")
-            
-            conversation_data = conversation.data[0]
-            
-        logging.info(f"[Lesson Summary] Found conversation data: {conversation_data}")
-        
-        # Get lesson details
-        lesson_title = "Practice Session"
-        if progress_data.get('lesson_id'):
-            lesson_template = supabase.table('lesson_templates').select('title').eq('id', progress_data['lesson_id']).execute()
-            if lesson_template.data:
-                lesson_title = lesson_template.data[0]['title']
-        elif progress_data.get('custom_lesson_id'):
-            custom_lesson = supabase.table('custom_lessons').select('title').eq('id', progress_data['custom_lesson_id']).execute()
-            if custom_lesson.data:
-                lesson_title = custom_lesson.data[0]['title']
-        
-        # Get messages from this conversation
-        messages = supabase.table('messages').select('*').eq('conversation_id', conversation_data['id']).order('created_at', desc=False).execute()
-        user_messages = [m for m in messages.data if m['role'] == 'user']
-        logging.info(f"[Lesson Summary] Found {len(user_messages)} user messages")
-        
-        # Get feedback for this conversation by joining through messages
-        # First get all message IDs from this conversation
-        message_ids = [m['id'] for m in messages.data]
-        
-        if message_ids:
-            feedback_data = supabase.table('message_feedback').select('*').in_('message_id', message_ids).execute()
-        else:
-            feedback_data = type('obj', (object,), {'data': []})()  # Empty result
-        
-        logging.info(f"[Lesson Summary] Found {len(feedback_data.data)} feedback records")
-        
-        # Analyze feedback patterns
-        mistake_categories = {}
-        total_mistakes = 0
-        
-        for feedback in feedback_data.data:
-            mistakes = feedback.get('mistakes', [])
-            for mistake in mistakes:
-                category = mistake.get('category', 'other')
-                severity = mistake.get('severity', 'minor')
-                
-                if category not in mistake_categories:
-                    mistake_categories[category] = {
-                        'category': category,
-                        'count': 0,
-                        'severity': severity,
-                        'examples': []
-                    }
-                
-                mistake_categories[category]['count'] += 1
-                mistake_categories[category]['examples'].append({
-                    'error': mistake.get('error', ''),
-                    'correction': mistake.get('correction', ''),
-                    'explanation': mistake.get('explanation', '')
-                })
-                total_mistakes += 1
-        
-        # Calculate conversation duration - handle case where lesson isn't completed yet
-        def parse_datetime_safe(datetime_str):
-            """Safely parse datetime string, handling microseconds"""
-            try:
-                # Remove Z and add timezone
-                if datetime_str.endswith('Z'):
-                    datetime_str = datetime_str.replace('Z', '+00:00')
-                
-                # Handle microseconds - truncate to 6 digits if longer
-                if '.' in datetime_str:
-                    date_part, time_part = datetime_str.split('.')
-                    if '+' in time_part:
-                        microseconds, timezone_part = time_part.split('+')
-                        microseconds = microseconds[:6].ljust(6, '0')  # Ensure exactly 6 digits
-                        datetime_str = f"{date_part}.{microseconds}+{timezone_part}"
-                    elif time_part.count(':') >= 2:  # Contains timezone offset
-                        microseconds = time_part[:6].ljust(6, '0')
-                        datetime_str = f"{date_part}.{microseconds}"
-                
-                return datetime.fromisoformat(datetime_str)
-            except Exception as e:
-                logging.error(f"[Lesson Summary] Error parsing datetime '{datetime_str}': {e}")
-                # Fallback: try without microseconds
-                try:
-                    if '.' in datetime_str:
-                        datetime_str = datetime_str.split('.')[0] + '+00:00'
-                    return datetime.fromisoformat(datetime_str)
-                except:
-                    # Last resort: return current time
-                    return datetime.now(timezone.utc)
-        
-        start_time = parse_datetime_safe(conversation_data['created_at'])
-        
-        if progress_data.get('completed_at'):
-            end_time = parse_datetime_safe(progress_data['completed_at'])
-        else:
-            # If not completed yet, use current time
-            end_time = datetime.now(timezone.utc)
-        
-        duration = end_time - start_time
-        duration_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
-        
-        # Calculate word count
-        total_words = sum(len(msg['content'].split()) for msg in user_messages)
-        
-        # Generate achievements (including verb badges)
-        achievements = await generate_achievements(user_id, progress_data, user_messages, total_words, duration, conversation_data['id'])
-        
-        # Extract new vocabulary (simplified - you could enhance this with NLP)
-        new_vocabulary = []
-        for msg in user_messages:
-            words = msg['content'].split()
-            # Simple heuristic: words longer than 5 characters that appear less frequently
-            for word in words:
-                if len(word) > 5 and word.lower() not in ['because', 'something', 'anything', 'everything']:
-                    new_vocabulary.append(word.lower())
-        
-        # Remove duplicates and limit
-        new_vocabulary = list(set(new_vocabulary))[:10]
-        
-        result = {
-            "lessonTitle": lesson_title,
-            "totalTurns": progress_data.get('turns_completed', 0),
-            "totalMistakes": total_mistakes,
-            "achievements": achievements,
-            "mistakesByCategory": list(mistake_categories.values()),
-            "conversationDuration": duration_str,
-            "wordsUsed": total_words,
-            "newVocabulary": new_vocabulary,
-            "improvementAreas": list(mistake_categories.keys())[:3]
-        }
-        
-        logging.info(f"[Lesson Summary] Successfully generated summary for progress_id: {progress_id}")
-        logging.info(f"[Lesson Summary] Lesson: {lesson_title}")
-        logging.info(f"[Lesson Summary] Achievements: {len(achievements)}")
-        logging.info(f"[Lesson Summary] Mistake categories: {len(list(mistake_categories.values()))}")
-        logging.info(f"[Lesson Summary] Conversation ID: {conversation_id}")
-        return result
+        # Use the optimized approach (using snapshots)
+        try:
+            logging.info(f"[Lesson Summary] Attempting optimized summary generation...")
+            summary = await get_lesson_summary_optimized(progress_id)
+            logging.info(f"[Lesson Summary] ✅ Optimized summary generated successfully!")
+            return summary
+        except Exception as e:
+            logging.error(f"[Lesson Summary] Failed to generate lesson summary: {e}")
+            raise HTTPException(
+                status_code=500, 
+                detail="Unable to generate lesson report card. This could be due to missing data snapshots or a technical issue. Please try again later or contact support if the problem persists."
+            )
+
         
     except HTTPException:
         # Re-raise HTTP exceptions as-is
@@ -3341,6 +3222,49 @@ def extract_json_from_response(text: str) -> Optional[dict]:
         return json.loads(text)
     except Exception:
         return None
+
+# Add a function to create verb knowledge snapshots
+async def create_verb_knowledge_snapshot(user_id: str, language: str, curriculum_id: str, 
+                                       lesson_progress_id: str, conversation_id: Optional[str] = None,
+                                       snapshot_reason: str = "lesson_completion") -> bool:
+    """Create a verb knowledge snapshot when a lesson is completed."""
+    try:
+        # Get current user knowledge
+        result = supabase.table('user_knowledge').select('knowledge_json').eq(
+            'user_id', user_id
+        ).eq('language', language).execute()
+        
+        if not result.data:
+            logging.warning(f"No user knowledge found for user {user_id}, language {language}")
+            verb_knowledge = {}
+        else:
+            knowledge = result.data[0]['knowledge_json']
+            verb_knowledge = knowledge.get('verbs', {}) if knowledge else {}
+        
+        # Create the snapshot
+        snapshot_data = {
+            'user_id': user_id,
+            'language': language,
+            'curriculum_id': curriculum_id,
+            'lesson_progress_id': lesson_progress_id,
+            'conversation_id': conversation_id,
+            'snapshot_reason': snapshot_reason,
+            'verb_knowledge': verb_knowledge,
+            'snapshot_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        snapshot_result = supabase.table('verb_knowledge_snapshots').insert(snapshot_data).execute()
+        
+        if snapshot_result.data:
+            logging.info(f"Created verb knowledge snapshot for lesson {lesson_progress_id}")
+            return True
+        else:
+            logging.error(f"Failed to create verb knowledge snapshot: {snapshot_result}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error creating verb knowledge snapshot: {e}")
+        return False
 
 if __name__ == "__main__":
     import uvicorn
