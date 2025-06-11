@@ -611,7 +611,7 @@ Language feature tag guidelines:
         except Exception as ws_error:
             logging.error(f"[Background] Error sending feedback error to client: {ws_error}")
 
-async def handle_openai_response_with_callback(ws, client_ws, level, context, language, on_openai_session_created, custom_instructions=None, initial_turns=0):
+async def handle_openai_response_with_callback(ws, client_ws, level, context, language, on_openai_session_created, custom_instructions=None, initial_turns=0, vad_settings=None):
     handler_id = str(uuid.uuid4())[:8]
     response_created = False
     conversation_id = None
@@ -619,6 +619,7 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
     on_openai_session_created_called = False
     current_turns = initial_turns  # Initialize with existing turn count for continuing conversations
     user_id = None  # Track user_id for knowledge updates
+    pending_user_message = False  # Track if we have a user message waiting for AI response
     logging.info(f"[Handler {handler_id}] Starting with initial_turns={initial_turns}")
     try:
         while True:
@@ -653,16 +654,41 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                 # Now send session config and response.create to OpenAI
                 instructions_to_send = custom_instructions if custom_instructions else get_level_specific_instructions(level, context, language)
                 logging.info(f"[Handler {handler_id}] Sending session.update with instructions:\n{instructions_to_send}")
+                # Configure turn detection based on VAD settings
+                logging.info(f"[Handler {handler_id}] VAD settings received: {vad_settings}")
+                turn_detection_config = {
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500
+                }
+                
+                if vad_settings:
+                    logging.info(f"[Handler {handler_id}] Processing VAD settings - type: {vad_settings.get('type')}")
+                    if vad_settings.get("type") == "semantic":
+                        turn_detection_config = {
+                            "type": "semantic_vad",
+                            "eagerness": vad_settings.get("eagerness", "medium")
+                        }
+                        logging.info(f"[Handler {handler_id}] Set semantic VAD with eagerness: {vad_settings.get('eagerness', 'medium')}")
+                    elif vad_settings.get("type") == "disabled":
+                        # For disabled VAD, we'll handle this in the frontend
+                        # Keep server_vad but with very high threshold to minimize false triggers
+                        turn_detection_config = {
+                            "type": "server_vad",
+                            "threshold": 0.9,
+                            "prefix_padding_ms": 100,
+                            "silence_duration_ms": 2000
+                        }
+                        logging.info(f"[Handler {handler_id}] Set disabled VAD (high threshold server_vad)")
+                else:
+                    logging.info(f"[Handler {handler_id}] No VAD settings provided, using default server_vad")
+                
                 session_config = {
                     "type": "session.update",
                     "session": {
                         "instructions": instructions_to_send,
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500
-                        },
+                        "turn_detection": turn_detection_config,
                         "voice": "alloy",
                         "temperature": 1,
                         "max_response_output_tokens": 4096,
@@ -693,14 +719,19 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                 transcript = data.get('transcript', '')
                 if transcript:
                     asyncio.create_task(save_message(conversation_id, 'assistant', transcript))
-                    # Increment turn count when assistant completes response
-                    current_turns += 1
-                    asyncio.create_task(update_lesson_progress_turns(conversation_id, current_turns, client_ws))
-                    
-                    # Trigger knowledge update every 5 turns for ongoing analysis
-                    if user_id and current_turns % 5 == 0:
-                        logging.info(f"[Handler {handler_id}] Triggering knowledge update after {current_turns} turns")
-                        asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
+                    # Only increment turn count if there was a pending user message (complete exchange)
+                    if pending_user_message:
+                        current_turns += 1
+                        asyncio.create_task(update_lesson_progress_turns(conversation_id, current_turns, client_ws))
+                        pending_user_message = False  # Reset for next exchange
+                        logging.info(f"[Handler {handler_id}] Complete turn exchange: user → AI. Turn count: {current_turns}")
+                        
+                        # Trigger knowledge update every 5 turns for ongoing analysis
+                        if user_id and current_turns % 5 == 0:
+                            logging.info(f"[Handler {handler_id}] Triggering knowledge update after {current_turns} turns")
+                            asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
+                    else:
+                        logging.info(f"[Handler {handler_id}] AI response without pending user message - no turn increment")
             # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
@@ -721,6 +752,8 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                         except Exception as e:
                             logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
                     asyncio.create_task(save_and_generate_feedback_and_emit())
+                    pending_user_message = True
+                    logging.info(f"[Handler {handler_id}] User message received - pending AI response for turn completion")
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
@@ -905,6 +938,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             initial_data = await websocket.receive_json()
             conversation_id = initial_data.get('conversation_id') or initial_data.get('conversation')
             custom_instructions = initial_data.get('custom_instructions')
+            vad_settings = initial_data.get('vad_settings')
             # If conversation_id is provided, fetch conversation and lesson info
             if conversation_id:
                 convo_result = supabase.table('conversations').select('*').eq('id', conversation_id).eq('user_id', user_id).execute()
@@ -1038,7 +1072,7 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
         # Start handling OpenAI responses
         openai_handler = asyncio.create_task(
             handle_openai_response_with_callback(
-                openai_ws, websocket, level, context, language, on_openai_session_created, custom_instructions, initial_turns
+                openai_ws, websocket, level, context, language, on_openai_session_created, custom_instructions, initial_turns, vad_settings
             )
         )
         # Main client message loop - only handle client->OpenAI messages

@@ -7,8 +7,9 @@ import ConversationHistory from '../components/ConversationHistory';
 import { Feedback, LessonProgress, LessonProgressEvent } from '../types/feedback';
 import FeedbackPanel from '../components/FeedbackPanel';
 import ChatBubble from '../components/ChatBubble';
-import LessonProgressIndicator from '../components/LessonProgressIndicator';
+
 import LessonSummaryModal from '../components/LessonSummaryModal';
+import { VADSettings } from '../components/VADSettingsModal';
 import type { Message } from '../types/feedback';
 
 const contextTitles: { [key: string]: string } = {
@@ -50,6 +51,15 @@ function ChatComponent() {
   const [sessionReady, setSessionReady] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [isMicPrompted, setIsMicPrompted] = useState(false);
+  
+  // Debug state changes
+  useEffect(() => {
+    console.log('[Chat] State change - conversationStarted:', conversationStarted);
+  }, [conversationStarted]);
+  
+  useEffect(() => {
+    console.log('[Chat] State change - sessionReady:', sessionReady);
+  }, [sessionReady]);
   const [customInstructions, setCustomInstructions] = useState<string | null>(null);
   const [lessonProgress, setLessonProgress] = useState<LessonProgress | null>(null);
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
@@ -59,6 +69,9 @@ function ChatComponent() {
   const [showLessonSummary, setShowLessonSummary] = useState(false);
   const [lessonSummaryData, setLessonSummaryData] = useState<any>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  
+  // VAD Settings States
+  const [vadSettings, setVadSettings] = useState<VADSettings>({ type: 'semantic', eagerness: 'low' });
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -394,9 +407,23 @@ function ChatComponent() {
     }
   };
 
-  // Step 1: User clicks 'Start Conversation'
+  // Step 1: User clicks 'Start Conversation' - Use integrated VAD settings
   const handleStartConversation = async () => {
-    // Unlock audio playback on user gesture
+    console.log('[Start] Starting conversation...');
+    
+    // Use default VAD settings if none selected
+    const finalVadSettings = vadSettings || { type: 'semantic', eagerness: 'low' };
+    
+    // Call the VAD settings confirm handler directly
+    await handleVADSettingsConfirm(finalVadSettings);
+  };
+
+  // Step 1.5: Handle VAD settings confirmation
+  const handleVADSettingsConfirm = async (settings: VADSettings) => {
+    console.log('[Chat] VAD settings confirmed:', settings);
+    setVadSettings(settings);
+    
+    // Unlock audio playbook on user gesture
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
     }
@@ -404,17 +431,20 @@ function ChatComponent() {
       await audioContextRef.current.resume();
     }
     console.log('[Chat] AudioContext initialized and resumed');
+    console.log('[Chat] Setting conversationStarted to true');
     setConversationStarted(true);
     // WebSocket/session setup will proceed in useEffect
   };
 
   // Step 2: WebSocket/session setup after conversationStarted
   useEffect(() => {
+    console.log('[Chat] WebSocket useEffect triggered, conversationStarted:', conversationStarted);
     if (!conversationStarted) return;
     let ws: WebSocket | null = null;
     let isMounted = true;
     (async function connectWS() {
       try {
+        console.log('[Chat] Starting WebSocket connection...');
         const { data } = await supabase.auth.getSession();
         const token = data?.session?.access_token;
         if (!isMounted) return;
@@ -431,7 +461,8 @@ function ChatComponent() {
             initMsg = {
               type: 'init',
               conversation_id: conversationId,
-              curriculum_id: curriculumId
+              curriculum_id: curriculumId,
+              vad_settings: vadSettings
             };
           } else {
             initMsg = {
@@ -439,7 +470,8 @@ function ChatComponent() {
               language: selectedLanguage,
               level: selectedLevel,
               context: selectedContext,
-              curriculum_id: curriculumId
+              curriculum_id: curriculumId,
+              vad_settings: vadSettings
             };
           }
           ws?.send(JSON.stringify(initMsg));
@@ -595,11 +627,13 @@ function ChatComponent() {
           setError('Disconnected from server');
         };
         ws.onerror = (error) => {
+          console.error('[Chat] WebSocket error:', error);
           setIsConnected(false);
           setError('WebSocket connection error');
         };
         wsRef.current = ws;
       } catch (error) {
+        console.error('[Chat] Failed to connect to server:', error);
         setError('Failed to connect to server');
         setIsConnected(false);
       }
@@ -863,9 +897,84 @@ function ChatComponent() {
   if (!conversationStarted) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
-        <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center">
-          <h2 className="text-2xl font-bold mb-2">Ready to begin?</h2>
-          <p className="mb-4 text-gray-700">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{selectedContext.startsWith('Lesson:') ? selectedContext.replace('Lesson:', '').trim() : contextTitles[selectedContext] || selectedContext}</b>.</p>
+        <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center max-w-lg w-full mx-4">
+          <h2 className="text-2xl font-bold mb-6 text-gray-800">Ready to begin?</h2>
+          <p className="mb-8 text-gray-700 text-center">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{selectedContext.startsWith('Lesson:') ? selectedContext.replace('Lesson:', '').trim() : contextTitles[selectedContext] || selectedContext}</b>.</p>
+          
+          {/* Integrated VAD Settings */}
+          <div className="w-full space-y-6 mb-8">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                Response Mode
+              </label>
+              <div className="space-y-3">
+                <div>
+                  <label className="flex items-center p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-colors cursor-pointer">
+                    <input
+                      type="radio"
+                      name="vadType"
+                      value="semantic"
+                      checked={vadSettings?.type === 'semantic'}
+                      onChange={(e) => setVadSettings({ type: 'semantic', eagerness: vadSettings?.eagerness || 'low' })}
+                      className="mr-3 text-orange-500 focus:ring-orange-500"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-800">Smart Detection</div>
+                    </div>
+                    <div className="relative group">
+                      <div className="w-5 h-5 bg-gray-300 rounded-full flex items-center justify-center text-xs text-white cursor-help">
+                        i
+                      </div>
+                      <div className="absolute right-0 top-6 w-64 p-2 bg-gray-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                        AI understands when you're done speaking and responds naturally
+                      </div>
+                    </div>
+                  </label>
+                  
+                  {/* Response Speed - directly under Smart Detection */}
+                  {vadSettings?.type === 'semantic' && (
+                    <div className="ml-8 mt-3 bg-orange-50/50 rounded-lg p-3 border-l-3 border-orange-300">
+                      <label className="block text-xs font-semibold text-gray-600 mb-2">
+                        Response speed
+                      </label>
+                      <select
+                        value={vadSettings.eagerness}
+                        onChange={(e) => setVadSettings({ ...vadSettings, eagerness: e.target.value as 'low' | 'medium' | 'high' })}
+                        className="w-full p-2 text-sm border border-orange-200 rounded-md bg-white focus:ring-1 focus:ring-orange-500 focus:border-orange-500"
+                      >
+                        <option value="low">Patient</option>
+                        <option value="medium">Balanced</option>
+                        <option value="high">Quick</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+                
+                <label className="flex items-center p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-colors cursor-pointer">
+                  <input
+                    type="radio"
+                    name="vadType"
+                    value="disabled"
+                    checked={vadSettings?.type === 'disabled'}
+                    onChange={(e) => setVadSettings({ type: 'disabled', eagerness: 'low' })}
+                    className="mr-3 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-gray-800">Manual Control</div>
+                  </div>
+                  <div className="relative group">
+                    <div className="w-5 h-5 bg-gray-300 rounded-full flex items-center justify-center text-xs text-white cursor-help">
+                      i
+                    </div>
+                    <div className="absolute right-0 top-6 w-64 p-2 bg-gray-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                      Press a button when you want to send your message
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+          
           <button
             onClick={handleStartConversation}
             className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
@@ -981,15 +1090,6 @@ function ChatComponent() {
 
         {/* Right Panel */}
         <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 flex flex-col">
-          {/* Lesson Progress Section - Only show for lesson conversations */}
-          {isLessonConversation && lessonProgress && (
-            <div className="flex-none p-4 border-b border-orange-100">
-              <LessonProgressIndicator
-                progress={lessonProgress}
-              />
-            </div>
-          )}
-          
           {/* Hints Section */}
           <div className="flex-none p-4 border-b border-orange-100">
             <div className="flex justify-between items-center mb-4">
@@ -1041,16 +1141,16 @@ function ChatComponent() {
           {!isRecording ? (
             <button
               onClick={handleStartRecording}
-              className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+              className="w-14 h-14 rounded-full bg-gray-100 hover:bg-gray-200 border-2 border-gray-300 transition-colors flex items-center justify-center group"
             >
-              Start Recording
+              <div className="w-0 h-0 border-l-[12px] border-l-orange-500 border-t-[8px] border-t-transparent border-b-[8px] border-b-transparent ml-1 group-hover:border-l-orange-600"></div>
             </button>
           ) : (
             <button
               onClick={stopRecording}
-              className="px-8 py-3 rounded-full text-white font-medium bg-orange-400 hover:bg-orange-500 transition-colors"
+              className="w-14 h-14 rounded-full bg-gray-100 hover:bg-gray-200 border-2 border-gray-300 transition-colors flex items-center justify-center"
             >
-              Stop Recording
+              <div className="w-3 h-3 bg-orange-500 rounded-sm"></div>
             </button>
           )}
           
@@ -1059,7 +1159,7 @@ function ChatComponent() {
             <button
               onClick={handleCompleteLesson}
               disabled={isCompletingLesson}
-              className="px-8 py-3 rounded-full bg-green-500 hover:bg-green-600 text-white font-medium transition-colors disabled:opacity-50 border-2 border-green-400"
+              className="px-8 py-3 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
             >
               {isCompletingLesson ? (
                 <div className="flex items-center">
@@ -1083,6 +1183,8 @@ function ChatComponent() {
           {error}
         </div>
       )}
+      
+
       
       {/* Lesson Summary Modal */}
       <LessonSummaryModal
