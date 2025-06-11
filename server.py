@@ -46,7 +46,7 @@ if not API_KEY:
 # Interaction mode configuration - can be "audio" or "text"
 INTERACTION_MODE = os.getenv("INTERACTION_MODE", "audio")
 
-WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17'
+WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17'
 
 # Initialize spaCy models
 nlp_models = {}
