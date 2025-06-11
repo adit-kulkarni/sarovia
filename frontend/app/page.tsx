@@ -183,6 +183,338 @@ const supabaseClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+// AI Insights Component
+// Progress Section Component with Tabs
+const ProgressSection = ({ 
+  selectedCurriculum, 
+  feedbackLoading, 
+  feedbackError, 
+  filteredFeedbacks, 
+  knowledgeRefreshKey, 
+  token 
+}: {
+  selectedCurriculum: Curriculum;
+  feedbackLoading: boolean;
+  feedbackError: string | null;
+  filteredFeedbacks: Feedback[];
+  knowledgeRefreshKey: number;
+  token: string | null;
+}) => {
+  const [activeTab, setActiveTab] = useState('growth');
+  
+  // Get all mistakes from feedbacks
+  const allMistakes = filteredFeedbacks.reduce((acc, feedback) => [...acc, ...feedback.mistakes], [] as Mistake[]);
+  
+  if (feedbackLoading) {
+    return (
+      <div className="mb-8">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">Your Progress</h2>
+        <div className="bg-white rounded shadow p-6 text-gray-500 text-center">Loading analytics...</div>
+      </div>
+    );
+  }
+  
+  if (feedbackError) {
+    return (
+      <div className="mb-8">
+        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">Your Progress</h2>
+        <div className="bg-white rounded shadow p-6 text-red-500 text-center">{feedbackError}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-8">
+      <h2 className="retro-header text-3xl font-extrabold text-center mb-6">Your Progress</h2>
+      
+      {/* Tab Navigation */}
+      <div className="mb-8">
+        <nav className="flex justify-center space-x-4">
+          <button
+            onClick={() => setActiveTab('growth')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'growth'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            📈 Growth
+          </button>
+          <button
+            onClick={() => setActiveTab('insights')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'insights'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            💡 Insights
+          </button>
+          <button
+            onClick={() => setActiveTab('data')}
+            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'data'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            📊 Data
+          </button>
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'growth' && (
+        <div className="space-y-6">
+          {/* Your Knowledge Panel */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <YourKnowledgePanel 
+              language={selectedCurriculum.language} 
+              level={selectedCurriculum.start_level}
+              refreshTrigger={knowledgeRefreshKey}
+            />
+          </div>
+          
+          {/* Custom Lessons Section */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <WeaknessAnalysis 
+              curriculumId={selectedCurriculum.id} 
+              language={selectedCurriculum.language}
+              token={token || ''}
+            />
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'insights' && (
+        <div className="space-y-6">
+          {token && (
+            <AIInsightsSection 
+              curriculumId={selectedCurriculum.id}
+              token={token}
+              language={selectedCurriculum.language}
+            />
+          )}
+        </div>
+      )}
+
+      {activeTab === 'data' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left Column */}
+          <div className="space-y-6">
+            {/* Mistake Categories Chart */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
+              <div className="flex-1 overflow-hidden">
+                <MistakeCategoriesChart mistakes={allMistakes} />
+              </div>
+            </div>
+            
+            {/* Severity Analysis */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
+              <div className="flex-1 overflow-hidden">
+                <SeverityAnalysisChart 
+                  mistakes={allMistakes}
+                  totalConversations={filteredFeedbacks.length}
+                  totalMessages={filteredFeedbacks.length}
+                />
+              </div>
+            </div>
+            
+            {/* Common Mistake Types */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
+              <div className="flex-1 overflow-y-auto">
+                <CommonMistakesList mistakes={allMistakes} />
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-6">
+            {/* Progress Over Time */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
+              <div className="flex-1 overflow-hidden">
+                <ProgressOverTimeChart 
+                  mistakes={allMistakes}
+                  feedbacks={filteredFeedbacks.map(f => ({
+                    timestamp: f.created_at || f.timestamp,
+                    mistakes: f.mistakes
+                  }))}
+                />
+              </div>
+            </div>
+            
+            {/* Language Feature Analysis */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Language Features</h3>
+              <div className="flex-1 overflow-y-auto">
+                <LanguageFeaturesHeatmap mistakes={allMistakes} />
+              </div>
+            </div>
+            
+            {/* Context Performance */}
+            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
+              <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
+              <div className="flex-1 overflow-hidden">
+                <ScaledMistakesPerConversationChart feedbacks={filteredFeedbacks} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AIInsightsSection = ({ curriculumId, token, language }: { 
+  curriculumId: string; 
+  token: string; 
+  language: string; 
+}) => {
+  const [insights, setInsights] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchInsights = async (forceRefresh = false) => {
+    try {
+      const loadingState = forceRefresh ? setRefreshing : setLoading;
+      loadingState(true);
+      setError(null);
+      
+      // Add cache-busting parameter for force refresh
+      const url = `${API_BASE}/api/insights?curriculum_id=${curriculumId}&days=30&token=${token}${forceRefresh ? '&refresh=true' : ''}`;
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setInsights(data);
+      } else {
+        throw new Error(`Failed to fetch insights: ${response.status}`);
+      }
+    } catch (err) {
+      console.error('Error fetching insights:', err);
+      setError('Failed to load insights from your conversation data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (curriculumId && token) {
+      fetchInsights();
+    }
+  }, [curriculumId, token, language]);
+
+  if (loading) {
+    return (
+      <div className="animate-pulse space-y-4">
+        <div className="h-32 bg-gray-200 rounded"></div>
+        <div className="h-32 bg-gray-200 rounded"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <p className="text-red-600">{error}</p>
+      </div>
+    );
+  }
+
+  if (!insights || !insights.insights || insights.insights.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <div className="text-4xl mb-4">🔍</div>
+        <h3 className="text-lg font-semibold text-gray-700 mb-2">No Insights Available Yet</h3>
+        <p className="text-gray-600 mb-4">
+          You need more conversation feedback data to generate AI insights. Have a few more conversations 
+          and come back to see personalized analysis of your learning patterns.
+        </p>
+        <div className="text-sm text-gray-500">
+          <p>• Minimum: 5-10 conversations with feedback</p>
+          <p>• Better insights: 20+ conversations over several days</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-semibold text-orange-800">Analysis Summary</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchInsights(true)}
+              disabled={refreshing}
+              className="text-xs text-orange-600 bg-orange-200 hover:bg-orange-300 px-2 py-1 rounded transition-colors disabled:opacity-50"
+              title="Refresh insights with latest data"
+            >
+              {refreshing ? '🔄 Refreshing...' : '🔄 Refresh'}
+            </button>
+            <div className="text-xs text-orange-600 bg-orange-200 px-2 py-1 rounded">
+              Updated: {new Date(insights.last_updated).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_conversations}</div>
+            <div className="text-orange-700">Conversations Analyzed</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_patterns}</div>
+            <div className="text-orange-700">Patterns Identified</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-orange-600">{insights.analysis_period}</div>
+            <div className="text-orange-700">Analysis Period</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Insights Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {insights.insights.map((insight: any) => (
+          <div
+            key={insight.id}
+            className={`border rounded-lg p-4 transition-all duration-200 hover:shadow-md ${
+              insight.severity === 'high' ? 'border-red-200 bg-red-50' :
+              insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
+              'border-green-200 bg-green-50'
+            }`}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-gray-800 font-medium flex-1">{insight.message}</p>
+              <span className="text-xl ml-2">
+                {insight.trend === 'improving' ? '↗' : insight.trend === 'stable' ? '→' : '↘'}
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
+              <span className="capitalize">{insight.trend}</span>
+              <span>•</span>
+              <span className="capitalize">{insight.severity} priority</span>
+            </div>
+            
+            <div className="bg-blue-100 p-3 rounded">
+              <h4 className="font-medium text-blue-800 mb-1">Suggested Action</h4>
+              <p className="text-blue-700 text-sm">{insight.action}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const Dashboard = () => {
   const [curriculums, setCurriculums] = useState<Curriculum[]>([]);
   const [selectedCurriculum, setSelectedCurriculum] = useState<Curriculum | null>(null);
@@ -212,6 +544,8 @@ const Dashboard = () => {
   const [showCompletedLessons, setShowCompletedLessons] = useState(false);
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
   const router = useRouter();
 
   const user = useUser();
@@ -733,100 +1067,17 @@ const Dashboard = () => {
 
       {/* User Progress Analytics */}
       {selectedCurriculum && (
-        <div className="mb-8">
-          <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
-            Your Progress
-          </h2>
-          {feedbackLoading ? (
-            <div className="bg-white rounded shadow p-6 text-gray-500 text-center">Loading analytics...</div>
-          ) : feedbackError ? (
-            <div className="bg-white rounded shadow p-6 text-red-500 text-center">{feedbackError}</div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Left Column */}
-              <div className="space-y-6">
-                {/* Your Knowledge Panel as first analytics card */}
-                <div className="bg-white rounded-lg shadow p-6">
-                  <YourKnowledgePanel 
-                    language={selectedCurriculum.language} 
-                    level={selectedCurriculum.start_level}
-                    refreshTrigger={knowledgeRefreshKey}
-                  />
-                </div>
-                {/* 1. Mistake Categories Chart */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistake Categories</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <MistakeCategoriesChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-                {/* 2. Severity Analysis */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <SeverityAnalysisChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
-                      totalConversations={filteredFeedbacks.length}
-                      totalMessages={filteredFeedbacks.length}
-                    />
-                  </div>
-                </div>
-                {/* 3. Common Mistake Types */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
-                  <div className="flex-1 overflow-y-auto">
-                    <CommonMistakesList 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-              </div>
-              {/* Right Column */}
-              <div className="space-y-6">
-                {/* Weakness Analysis and Custom Lessons */}
-                <div className="bg-white rounded-lg shadow p-6">
-                  <WeaknessAnalysis 
-                    curriculumId={selectedCurriculum.id} 
-                    language={selectedCurriculum.language}
-                    token={token || ''}
-                  />
-                </div>
-                {/* 4. Progress Over Time */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <ProgressOverTimeChart 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])}
-                      feedbacks={filteredFeedbacks.map(f => ({
-                        timestamp: f.created_at || f.timestamp,
-                        mistakes: f.mistakes
-                      }))}
-                    />
-                  </div>
-                </div>
-                {/* 5. Language Feature Analysis */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Language Features</h3>
-                  <div className="flex-1 overflow-y-auto">
-                    <LanguageFeaturesHeatmap 
-                      mistakes={filteredFeedbacks.reduce((acc, f) => [...acc, ...f.mistakes], [] as Mistake[])} 
-                    />
-                  </div>
-                </div>
-                {/* 6. Context Performance */}
-                <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-                  <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
-                  <div className="flex-1 overflow-hidden">
-                    <ScaledMistakesPerConversationChart feedbacks={filteredFeedbacks} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <ProgressSection 
+          selectedCurriculum={selectedCurriculum}
+          feedbackLoading={feedbackLoading}
+          feedbackError={feedbackError}
+          filteredFeedbacks={filteredFeedbacks}
+          knowledgeRefreshKey={knowledgeRefreshKey}
+          token={token}
+        />
       )}
+
+
 
       {/* Add Curriculum Modal */}
       <Transition.Root show={showAdd} as={Fragment}>

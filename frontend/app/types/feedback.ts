@@ -35,8 +35,8 @@ export interface ChatBubbleProps {
 export const mistakeCategoryEmojis: Record<string, string> = {
   grammar: '📚',
   vocabulary: '🗣️',
-  spelling: '✏️',
-  punctuation: '🔤',
+  spelling: '✏️',        // For future text-based interactions
+  punctuation: '🔤',     // For future text-based interactions
   syntax: '🧩',
   'word choice': '🎯',
   'register/formality': '🕴️',
