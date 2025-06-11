@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, Query, Body, HTTPException, Request
+from fastapi import FastAPI, WebSocket, Query, Body, HTTPException, Request, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
@@ -6,7 +6,7 @@ import asyncio
 import websockets
 import os
 from dotenv import load_dotenv
-from supabase import create_client
+from supabase import create_client, Client
 import os
 import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
@@ -14,7 +14,7 @@ import requests
 import logging
 import uuid
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import aiohttp
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
@@ -32,12 +32,72 @@ from optimized_lesson_summary import get_lesson_summary_optimized
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
+# Add connection management and task queue classes
+class DatabaseManager:
+    def __init__(self, supabase_client):
+        self.client = supabase_client
+        self._connection_semaphore = asyncio.Semaphore(10)  # Limit concurrent DB operations
+    
+    async def execute_query(self, query_func):
+        """Execute database queries with connection limiting"""
+        async with self._connection_semaphore:
+            return await asyncio.get_event_loop().run_in_executor(None, query_func)
+
+class BackgroundTaskManager:
+    def __init__(self):
+        self._task_queue = asyncio.Queue(maxsize=100)  # Limit queue size
+        self._worker_semaphore = asyncio.Semaphore(5)  # Limit concurrent background tasks
+        self._workers = []
+    
+    async def start_workers(self, num_workers=3):
+        """Start background worker tasks"""
+        for i in range(num_workers):
+            worker = asyncio.create_task(self._worker())
+            self._workers.append(worker)
+    
+    async def _worker(self):
+        """Background worker to process tasks"""
+        while True:
+            try:
+                task_func, args, kwargs = await self._task_queue.get()
+                async with self._worker_semaphore:
+                    try:
+                        if asyncio.iscoroutinefunction(task_func):
+                            await task_func(*args, **kwargs)
+                        else:
+                            # Run synchronous functions in thread pool
+                            await asyncio.get_event_loop().run_in_executor(None, task_func, *args, **kwargs)
+                    except Exception as e:
+                        logging.error(f"Background task error: {e}")
+                self._task_queue.task_done()
+            except Exception as e:
+                logging.error(f"Worker error: {e}")
+                await asyncio.sleep(1)  # Brief pause on error
+    
+    async def submit_task(self, task_func, *args, **kwargs):
+        """Submit a task to the background queue"""
+        try:
+            await self._task_queue.put((task_func, args, kwargs))
+        except asyncio.QueueFull:
+            logging.warning("Background task queue is full, dropping task")
+    
+    def submit_task_nowait(self, task_func, *args, **kwargs):
+        """Submit a task without waiting (non-blocking)"""
+        try:
+            self._task_queue.put_nowait((task_func, args, kwargs))
+        except asyncio.QueueFull:
+            logging.warning("Background task queue is full, dropping task")
+
 # Load environment variables
 load_dotenv()
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_SERVICE_KEY")
 jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
 supabase = create_client(url, key)
+
+# Initialize database manager
+db_manager = DatabaseManager(supabase)
+# task_manager = BackgroundTaskManager()  # Temporarily disabled
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
@@ -205,6 +265,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Startup will be handled by the main execution at the bottom of the file
 
 
 # Store active connections
@@ -391,14 +453,22 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
 async def process_feedback_background(message_id: str, language: str, level: str, client_ws: WebSocket, interaction_type: str = "audio"):
     """Process feedback in the background without blocking the conversation"""
     try:
-        # Get the message from the database
-        message_result = supabase.table('messages').select('*').eq('id', message_id).execute()
+        # Use database manager for async execution
+        def get_message():
+            return supabase.table('messages').select('*').eq('id', message_id).execute()
+        
+        message_result = await db_manager.execute_query(get_message)
         if not message_result.data:
             logging.error(f"[Background] Message not found: message_id={message_id}")
             return
         
         message = message_result.data[0]
         original_message = message['content']
+        
+        # Skip feedback for very short messages or common responses
+        if len(original_message.strip()) < 3:
+            logging.info(f"[Background] Skipping feedback for very short message: {original_message}")
+            return
         
         # Get conversation context
         conversation_result = supabase.table('conversations').select('*').eq('id', message['conversation_id']).execute()
@@ -493,7 +563,7 @@ Language feature tag guidelines:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "gpt-4-turbo-preview",
+                    "model": "gpt-4o-mini",
                     "messages": [{"role": "system", "content": prompt}],
                     "temperature": 0.3,
                     "response_format": { "type": "json_object" }
@@ -529,44 +599,11 @@ Language feature tag guidelines:
             'mistakes': mistakes_dict
         }).execute()
         
-        # Invalidate insights cache since we have new feedback data
-        try:
-            # Get the conversation/curriculum info to invalidate the right cache
-            # First get the message to find the conversation
-            message_result = supabase.table('messages') \
-                .select('conversation_id') \
-                .eq('id', message_id) \
-                .execute()
-            
-            if message_result.data and len(message_result.data) > 0:
-                conversation_id = message_result.data[0]['conversation_id']
-                
-                # Now get the conversation details
-                conversation_result = supabase.table('conversations') \
-                    .select('user_id, curriculum_id') \
-                    .eq('id', conversation_id) \
-                    .execute()
-                
-                if conversation_result.data and len(conversation_result.data) > 0:
-                    conv_data = conversation_result.data[0]
-                    user_id = conv_data['user_id']
-                    curriculum_id = conv_data['curriculum_id']
-                    
-                    if curriculum_id:  # Only invalidate if we have a curriculum_id
-                        await invalidate_insights_cache(user_id, curriculum_id)
-                        logging.info(f"[Background] Invalidated insights cache for user {user_id}, curriculum {curriculum_id}")
-        except Exception as e:
-            logging.error(f"[Background] Error invalidating insights cache: {e}")
-            # Don't fail the feedback processing if cache invalidation fails
+        # Cache invalidation moved to post-conversation for better performance
+        # Real-time cache updates removed to keep conversation fluent
         
-        # Record language feature tags from all mistakes
-        all_tags = []
-        for mistake in feedback.mistakes:
-            if mistake.languageFeatureTags:
-                all_tags.extend(mistake.languageFeatureTags)
-        
-        if all_tags:
-            await record_language_tags(all_tags, language)
+        # Language tag recording moved to post-conversation for better performance
+        # Real-time tag processing removed to keep conversation fluent
         
         # Send feedback to client
         await client_ws.send_json({
@@ -726,10 +763,8 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                         pending_user_message = False  # Reset for next exchange
                         logging.info(f"[Handler {handler_id}] Complete turn exchange: user → AI. Turn count: {current_turns}")
                         
-                        # Trigger knowledge update every 5 turns for ongoing analysis
-                        if user_id and current_turns % 5 == 0:
-                            logging.info(f"[Handler {handler_id}] Triggering knowledge update after {current_turns} turns")
-                            asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
+                        # Knowledge updates moved to post-conversation for better performance
+                        # Real-time updates removed to keep conversation fluent
                     else:
                         logging.info(f"[Handler {handler_id}] AI response without pending user message - no turn increment")
             # Save user messages (transcription) and generate feedback
@@ -757,10 +792,10 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
-        # Final knowledge update when conversation ends
+        # Post-conversation processing when conversation ends
         if user_id and conversation_id and current_turns > 0:
-            logging.info(f"[Handler {handler_id}] Triggering final knowledge update for conversation {conversation_id}")
-            asyncio.create_task(update_user_knowledge_incrementally(user_id, language, [conversation_id]))
+            logging.info(f"[Handler {handler_id}] Scheduling post-conversation analysis for {conversation_id}")
+            asyncio.create_task(process_conversation_completion(user_id, conversation_id, language, current_turns))
         await ws.close()
 
 async def create_conversation(user_id: str, context: str, language: str, level: str, curriculum_id: str) -> str:
@@ -786,11 +821,16 @@ async def save_message(conversation_id: str, role: str, content: str):
     """Save a message to the database and return the result"""
     try:
         logging.debug(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
-        result = supabase.table('messages').insert({
-            'conversation_id': conversation_id,
-            'role': role,
-            'content': content
-        }).execute()
+        
+        # Use database manager for async execution
+        def insert_message():
+            return supabase.table('messages').insert({
+                'conversation_id': conversation_id,
+                'role': role,
+                'content': content
+            }).execute()
+        
+        result = await db_manager.execute_query(insert_message)
         logging.debug(f"[save_message] result: {result}")
         return result
     except Exception as e:
@@ -878,8 +918,11 @@ async def get_or_create_lesson_progress(conversation_id: str, user_id: str) -> d
 async def update_lesson_progress_turns(conversation_id: str, turns: int, client_ws):
     """Update lesson progress with current turn count"""
     try:
-        # Get conversation details to find user_id
-        conversation = supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+        # Use database manager for async execution
+        def get_conversation():
+            return supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+        
+        conversation = await db_manager.execute_query(get_conversation)
         if not conversation.data:
             return
         
@@ -892,22 +935,26 @@ async def update_lesson_progress_turns(conversation_id: str, turns: int, client_
             return
         
         # Update turn count
-        supabase.table('lesson_progress').update({
-            'turns_completed': turns,
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', progress['id']).execute()
+        def update_progress():
+            return supabase.table('lesson_progress').update({
+                'turns_completed': turns,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', progress['id']).execute()
         
-        # Send progress update to client
+        await db_manager.execute_query(update_progress)
+        
+        # Send progress update to client (only every 3 turns to reduce message frequency)
         can_complete = turns >= progress['required_turns']
-        await client_ws.send_json({
-            "type": "lesson.progress",
-            "turns": turns,
-            "required": progress['required_turns'],
-            "can_complete": can_complete,
-            "lesson_id": progress.get('lesson_id'),
-            "custom_lesson_id": progress.get('custom_lesson_id'),
-            "progress_id": progress['id']
-        })
+        if turns % 3 == 0 or can_complete:
+            await client_ws.send_json({
+                "type": "lesson.progress",
+                "turns": turns,
+                "required": progress['required_turns'],
+                "can_complete": can_complete,
+                "lesson_id": progress.get('lesson_id'),
+                "custom_lesson_id": progress.get('custom_lesson_id'),
+                "progress_id": progress['id']
+            })
         
         logging.info(f"[Progress] Updated lesson progress: {turns}/{progress['required_turns']} turns, can_complete={can_complete}")
         
@@ -1170,7 +1217,7 @@ async def generate_hint(level: str, context: str, language: str, conversation_hi
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "gpt-4-turbo-preview",
+                    "model": "gpt-4o-mini",
                     "messages": [{"role": "system", "content": prompt}],
                     "temperature": 0.7,
                     "max_tokens": 150
@@ -4275,6 +4322,106 @@ async def invalidate_insights_cache(user_id: str, curriculum_id: str):
         logging.info(f"Invalidated insights cache for user {user_id}, curriculum {curriculum_id}")
     except Exception as e:
         logging.error(f"Error invalidating insights cache: {e}")
+
+async def process_conversation_completion(user_id: str, conversation_id: str, language: str, turns: int):
+    """
+    Comprehensive post-conversation processing for analytics, insights, and knowledge updates.
+    This runs after conversation ends to avoid impacting conversation fluency.
+    """
+    try:
+        logging.info(f"[Post-Conversation] Starting analysis for conversation {conversation_id}, {turns} turns")
+        
+        # Get conversation details
+        def get_conversation():
+            return supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+        
+        conversation_result = await db_manager.execute_query(get_conversation)
+        if not conversation_result.data:
+            logging.error(f"[Post-Conversation] Conversation not found: {conversation_id}")
+            return
+        
+        conversation = conversation_result.data[0]
+        curriculum_id = conversation.get('curriculum_id')
+        
+        # 1. Update user knowledge with conversation data
+        logging.info(f"[Post-Conversation] Updating user knowledge for {user_id}")
+        await update_user_knowledge_incrementally(user_id, language, [conversation_id])
+        
+        # 2. Process language tags from all feedback in this conversation
+        logging.info(f"[Post-Conversation] Processing language tags for conversation {conversation_id}")
+        await process_conversation_language_tags(conversation_id, language)
+        
+        # 3. Invalidate insights cache to reflect new data
+        if curriculum_id:
+            logging.info(f"[Post-Conversation] Invalidating insights cache for curriculum {curriculum_id}")
+            await invalidate_insights_cache(user_id, curriculum_id)
+        
+        # 4. Generate achievements and badges if applicable
+        logging.info(f"[Post-Conversation] Generating achievements for conversation {conversation_id}")
+        await generate_conversation_achievements(user_id, conversation_id, curriculum_id, turns)
+        
+        # 5. Create verb knowledge snapshot for lessons
+        lesson_id = conversation.get('lesson_id')
+        custom_lesson_id = conversation.get('custom_lesson_id')
+        if lesson_id or custom_lesson_id:
+            logging.info(f"[Post-Conversation] Creating verb knowledge snapshot for lesson")
+            # Get lesson progress to create snapshot
+            def get_progress():
+                return supabase.table('lesson_progress') \
+                    .select('id') \
+                    .eq('conversation_id', conversation_id) \
+                    .execute()
+            
+            progress_result = await db_manager.execute_query(get_progress)
+            if progress_result.data:
+                progress_id = progress_result.data[0]['id']
+                await create_verb_knowledge_snapshot(
+                    user_id, language, curriculum_id, progress_id, 
+                    conversation_id, "conversation_completion"
+                )
+        
+        logging.info(f"[Post-Conversation] Completed analysis for conversation {conversation_id}")
+        
+    except Exception as e:
+        logging.error(f"[Post-Conversation] Error processing conversation completion: {e}")
+
+async def process_conversation_language_tags(conversation_id: str, language: str):
+    """Process language tags from all feedback in a conversation"""
+    try:
+        # Get all feedback for this conversation
+        def get_feedback():
+            return supabase.table('message_feedback') \
+                .select('mistakes, messages!inner(conversation_id)') \
+                .eq('messages.conversation_id', conversation_id) \
+                .execute()
+        
+        feedback_result = await db_manager.execute_query(get_feedback)
+        
+        all_tags = []
+        for feedback in feedback_result.data:
+            for mistake in feedback.get('mistakes', []):
+                if mistake.get('languageFeatureTags'):
+                    all_tags.extend(mistake['languageFeatureTags'])
+        
+        if all_tags:
+            await record_language_tags(all_tags, language)
+            logging.info(f"[Post-Conversation] Processed {len(all_tags)} language tags")
+        
+    except Exception as e:
+        logging.error(f"[Post-Conversation] Error processing language tags: {e}")
+
+async def generate_conversation_achievements(user_id: str, conversation_id: str, curriculum_id: str, turns: int):
+    """Generate achievements and badges for completed conversation"""
+    try:
+        # Generate verb badge achievements if applicable
+        if curriculum_id:
+            await generate_verb_badge_achievements(user_id, conversation_id, curriculum_id)
+            logging.info(f"[Post-Conversation] Generated verb badges for conversation {conversation_id}")
+        
+    except Exception as e:
+        logging.error(f"[Post-Conversation] Error generating achievements: {e}")
+
+
 
 if __name__ == "__main__":
     import uvicorn
