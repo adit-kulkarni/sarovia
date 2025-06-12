@@ -26,6 +26,7 @@ interface LanguageCard {
   code: string;
   name: string;
   flag: string;
+  countryFlags: string[];
 }
 
 interface ContextCard {
@@ -119,13 +120,48 @@ interface MistakeSummary {
 }
 
 const languages: LanguageCard[] = [
-  { code: 'en', name: 'English', flag: '🇬🇧' },
-  { code: 'it', name: 'Italian', flag: '🇮🇹' },
-  { code: 'es', name: 'Spanish', flag: '🇪🇸' },
-  { code: 'pt', name: 'Portuguese', flag: '🇵🇹' },
-  { code: 'fr', name: 'French', flag: '🇫🇷' },
-  { code: 'de', name: 'German', flag: '🇩🇪' },
-  { code: 'kn', name: 'Kannada', flag: '🇮🇳' }
+  { 
+    code: 'en', 
+    name: 'English', 
+    flag: '🇬🇧',
+    countryFlags: ['🇬🇧', '🇺🇸', '🇨🇦', '🇦🇺', '🇳🇿', '🇮🇪', '🇿🇦', '🇸🇬', '🇮🇳', '🇯🇲']
+  },
+  { 
+    code: 'it', 
+    name: 'Italian', 
+    flag: '🇮🇹',
+    countryFlags: ['🇮🇹', '🇻🇦', '🇸🇲', '🇨🇭', '🇲🇹', '🇸🇮', '🇭🇷', '🇦🇷', '🇧🇷', '🇺🇸']
+  },
+  { 
+    code: 'es', 
+    name: 'Spanish', 
+    flag: '🇪🇸',
+    countryFlags: ['🇪🇸', '🇲🇽', '🇦🇷', '🇨🇴', '🇵🇪', '🇻🇪', '🇨🇱', '🇪🇨', '🇬🇹', '🇨🇺']
+  },
+  { 
+    code: 'pt', 
+    name: 'Portuguese', 
+    flag: '🇵🇹',
+    countryFlags: ['🇵🇹', '🇧🇷', '🇦🇴', '🇲🇿', '🇨🇻', '🇬🇼', '🇸🇹', '🇹🇱', '🇲🇴', '🇬🇶']
+  },
+  { 
+    code: 'fr', 
+    name: 'French', 
+    flag: '🇫🇷',
+    countryFlags: ['🇫🇷', '🇨🇦', '🇧🇪', '🇨🇭', '🇱🇺', '🇲🇨', '🇸🇳', '🇨🇮', '🇲🇦', '🇭🇹']
+  },
+  { 
+    code: 'de', 
+    name: 'German', 
+    flag: '🇩🇪',
+    countryFlags: ['🇩🇪', '🇦🇹', '🇨🇭', '🇱🇮', '🇱🇺', '🇧🇪', '🇩🇰', '🇵🇱', '🇮🇹', '🇳🇦']
+  },
+  { 
+    code: 'kn', 
+    name: 'Kannada', 
+    flag: '🇮🇳',
+    countryFlags: ['🇮🇳']
+  }
 ];
 
 const contextCards: ContextCard[] = [
@@ -184,6 +220,40 @@ const supabaseClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
+
+// Component to display multiple country flags with overflow handling
+const MultiCountryFlags = ({ language }: { language: LanguageCard }) => {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const maxVisibleFlags = 3; // Show up to 3 flags initially
+  const visibleFlags = language.countryFlags.slice(0, maxVisibleFlags);
+  const allFlags = language.countryFlags;
+  
+  return (
+    <div className="flex items-center gap-1 relative flex-1 mr-2">
+      {/* Language name */}
+      <span className="font-bold text-2xl mr-2">{language.name}</span>
+      
+      {/* Visible flags with hover for all flags */}
+      <div 
+        className="flex items-center gap-1 relative cursor-help"
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+      >
+        {visibleFlags.map((flag, index) => (
+          <span key={index} className="text-lg">{flag}</span>
+        ))}
+        
+        {/* Tooltip showing all flags */}
+        {showTooltip && allFlags.length > maxVisibleFlags && (
+          <div className="absolute top-full left-0 mt-2 bg-black text-white px-3 py-2 rounded-lg text-sm whitespace-nowrap z-50 shadow-lg">
+            {allFlags.join(' ')}
+            <div className="absolute bottom-full left-4 border-4 border-transparent border-b-black"></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 // AI Insights Component
 // Progress Section Component with Tabs
@@ -742,7 +812,38 @@ const Dashboard = () => {
     setLessonSummaryData(null);
   };
 
-
+  // Function to calculate current level based on completed lessons
+  const getCurrentLevel = (curriculum: Curriculum) => {
+    if (!selectedCurriculum || selectedCurriculum.id !== curriculum.id) {
+      return curriculum.start_level; // Default to start level if not selected curriculum
+    }
+    
+    // Get completed lessons for this curriculum
+    const completedLessons = lessonTemplates.filter(lesson => {
+      const progress = lesson.progress;
+      return progress?.status === 'completed';
+    });
+    
+    if (completedLessons.length === 0) {
+      return curriculum.start_level; // No completed lessons, return start level
+    }
+    
+    // Define level order for proper sorting
+    const levelOrder = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+    
+    // Find the highest level among completed lessons
+    const completedLevels = completedLessons
+      .map(lesson => lesson.level)
+      .filter((level): level is string => level !== null && level !== undefined && levelOrder.includes(level)) // Remove null/undefined and invalid levels
+      .sort((a, b) => levelOrder.indexOf(a) - levelOrder.indexOf(b)); // Sort by level order
+    
+    if (completedLevels.length === 0) {
+      return curriculum.start_level; // No valid levels found
+    }
+    
+    // Return the highest completed level
+    return completedLevels[completedLevels.length - 1];
+  };
 
   useEffect(() => {
     const fetchFeedback = async () => {
@@ -776,46 +877,47 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="relative max-w-6xl mx-auto p-6 min-h-screen bg-gradient-to-br from-orange-50 via-white to-orange-100">
+    <div className="relative max-w-6xl mx-auto p-6 min-h-screen">
       {/* Jump into a Conversation Button */}
       <div className="flex flex-col items-center mb-8 relative" style={{zIndex: 1}}>
-        {/* Top doodle burst */}
-        <svg width="240" height="50" viewBox="0 0 240 50" fill="none" xmlns="http://www.w3.org/2000/svg" className="mb-2">
-          {/* Left scribble */}
-          <path d="M20 20 Q10 18 25 25 Q10 28 28 30" stroke="#222" strokeWidth="3.5" strokeLinecap="round" fill="none" />
-          <path d="M35 10 Q25 15 40 18 Q28 22 45 25" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-          {/* Right scribble */}
-          <path d="M220 20 Q230 18 215 25 Q230 28 212 30" stroke="#222" strokeWidth="3.5" strokeLinecap="round" fill="none" />
-          <path d="M205 10 Q215 15 200 18 Q212 22 195 25" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-          {/* Top scribble */}
-          <path d="M120 5 Q122 12 118 18 Q125 10 130 18" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-        </svg>
-        <button
-          className="retro-header px-7 py-3 text-lg font-extrabold bg-orange-500 text-white border-4 border-orange-300 rounded-full shadow-[0_8px_32px_0_rgba(255,140,0,0.18)] hover:bg-orange-600 hover:scale-105 transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-orange-200 relative"
-          style={{
-            textShadow: '2px 2px 0 #ffb74d',
-            color: '#fff',
-            boxShadow: '0 8px 32px 0 rgba(255,140,0,0.18), 0 2px 0 #ffb74d',
-            background: 'linear-gradient(180deg, #ff9800 0%, #fb8c00 100%)',
-            letterSpacing: '1px',
-            overflow: 'visible',
-          }}
+        <div
+          className="bg-white rounded-3xl shadow-lg border border-orange-200 p-8 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200 focus-within:ring-4 focus-within:ring-orange-200 group"
+          style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.12)' }}
           onClick={handleStartConversation}
         >
-          <span className="mr-2 text-xl align-middle">💬</span>Jump into a Conversation
-        </button>
-        {/* Bottom doodle burst */}
-        <svg width="240" height="50" viewBox="0 0 240 50" fill="none" xmlns="http://www.w3.org/2000/svg" className="mt-2">
-          {/* Left scribble */}
-          <path d="M20 30 Q10 32 25 25 Q10 22 28 20" stroke="#222" strokeWidth="3.5" strokeLinecap="round" fill="none" />
-          <path d="M35 40 Q25 35 40 32 Q28 28 45 25" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-          {/* Right scribble */}
-          <path d="M220 30 Q230 32 215 25 Q230 22 212 20" stroke="#222" strokeWidth="3.5" strokeLinecap="round" fill="none" />
-          <path d="M205 40 Q215 35 200 32 Q212 28 195 25" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-          {/* Bottom scribble */}
-          <path d="M120 45 Q122 38 118 32 Q125 40 130 32" stroke="#222" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-        </svg>
+          <div className="flex flex-col items-center">
+            {/* Microphone Icon */}
+            <div className="relative mb-4">
+              {/* Microphone body */}
+              <div className="bg-gradient-to-b from-orange-400 to-orange-600 rounded-full w-16 h-24 relative group-hover:scale-110 transition-transform duration-200 shadow-lg">
+                {/* Microphone grille lines */}
+                <div className="absolute inset-x-0 top-4 space-y-1 px-4">
+                  <div className="h-0.5 bg-white/30 rounded"></div>
+                  <div className="h-0.5 bg-white/30 rounded"></div>
+                  <div className="h-0.5 bg-white/30 rounded"></div>
+                  <div className="h-0.5 bg-white/30 rounded"></div>
+                </div>
+                {/* Microphone highlight */}
+                <div className="absolute top-2 left-2 w-3 h-6 bg-white/20 rounded-full"></div>
+              </div>
+              
+              {/* Microphone stand */}
+              <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-1 h-6 bg-gray-400 group-hover:scale-110 transition-transform duration-200"></div>
+              
+              {/* Microphone base */}
+              <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-8 h-2 bg-gray-500 rounded-full group-hover:scale-110 transition-transform duration-200"></div>
+            </div>
+            
+            <h3 className="retro-header text-2xl font-bold text-orange-600">
+              Practice Now
+            </h3>
+          </div>
+        </div>
       </div>
+
+      {/* Section Divider */}
+      <div className="section-divider"></div>
+
       {/* Floating Add Button */}
       <div className="mb-12">
         <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
@@ -851,17 +953,19 @@ const Dashboard = () => {
                   <TrashIcon className="h-4 w-4" />
                 </button>
                 <div className="text-2xl font-bold mb-2 flex items-center gap-2">
-                  {languages.find(l => l.code === c.language)?.flag}
-                  {languages.find(l => l.code === c.language)?.name || c.language}
+                  <MultiCountryFlags language={languages.find(l => l.code === c.language) || { code: c.language, name: c.language, flag: '🏳️', countryFlags: ['🏳️'] }} />
                 </div>
                 <div className="text-sm text-gray-700 mb-1">Start Level: <span className="font-semibold">{c.start_level}</span></div>
                 <div className="text-sm text-gray-700 mb-1">Start Date: <span className="font-semibold">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
-                <div className="text-sm text-gray-700">Current Level: <span className="font-semibold">(coming soon)</span></div>
+                <div className="text-sm text-gray-700">Current Level: <span className="font-semibold">{getCurrentLevel(c)}</span></div>
               </div>
             ))}
           </div>
         </div>
             </div>
+
+      {/* Section Divider */}
+      <div className="section-divider"></div>
 
       {/* Curriculum Path Tiles (for selected curriculum) */}
       <div className="mb-12">
@@ -958,18 +1062,14 @@ const Dashboard = () => {
                         {loadingSummaryMap[lesson.id] ? 'Loading...' : '📊 Report Card'}
                       </button>
                     )}
-                    <button
-                      className={`${isCompact ? 'px-4 py-1.5 text-xs' : 'px-5 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors ${
-                        isCompleted 
-                          ? 'bg-orange-500 hover:bg-orange-600 text-white' 
-                          : isInProgress 
-                            ? 'bg-orange-500 hover:bg-orange-600 text-white' 
-                            : 'bg-orange-500 hover:bg-orange-600 text-white'
-                      }`}
-                                                  onClick={() => isCompleted ? handleViewReportCard(lesson.id) : handleStartLesson(lesson.id)}
-                    >
-                      {isCompleted ? 'Review Lesson' : isInProgress ? 'Continue Lesson' : 'Start Lesson'}
-                    </button>
+                    {!isCompleted && (
+                      <button
+                        className={`${isCompact ? 'px-4 py-1.5 text-xs' : 'px-5 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors bg-orange-500 hover:bg-orange-600 text-white`}
+                        onClick={() => handleStartLesson(lesson.id)}
+                      >
+                        {isInProgress ? 'Continue Lesson' : 'Start Lesson'}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1054,6 +1154,9 @@ const Dashboard = () => {
         </div>
       </div>
 
+      {/* Section Divider */}
+      <div className="section-divider"></div>
+
       {/* User Progress Analytics */}
       {selectedCurriculum && (
         <ProgressSection 
@@ -1121,7 +1224,7 @@ const Dashboard = () => {
                             onClick={() => setNewLang(l.code)}
                             disabled={adding}
                           >
-                            <span className="text-2xl mb-1">{languages.find(lang => lang.code === l.code)?.flag}</span>
+                            <span className="text-2xl mb-1">{languages.find(lang => lang.code === l.code)?.countryFlags[0] || '🏳️'}</span>
                             <span className="font-semibold text-sm">{l.name}</span>
                           </button>
                         ))}
@@ -1252,10 +1355,10 @@ const Dashboard = () => {
                     return (
                       <div className="mb-4 text-center">
                         <div className="text-lg font-semibold mb-1 flex items-center justify-center gap-2">
-                          {languages.find(l => l.code === c.language)?.flag}
-                          {languages.find(l => l.code === c.language)?.name || c.language}
+                          <MultiCountryFlags language={languages.find(l => l.code === c.language) || { code: c.language, name: c.language, flag: '🏳️', countryFlags: ['🏳️'] }} />
                         </div>
                         <div className="text-sm text-gray-700 mb-1">Start Level: <span className="font-semibold">{c.start_level}</span></div>
+                        <div className="text-sm text-gray-700 mb-1">Current Level: <span className="font-semibold">{getCurrentLevel(c)}</span></div>
                         <div className="text-sm text-gray-700 mb-1">Start Date: <span className="font-semibold">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
                       </div>
                     );

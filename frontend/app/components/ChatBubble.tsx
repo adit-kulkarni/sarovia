@@ -51,7 +51,7 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick }: Ch
         </div>
       )}
       <div
-        className={`rounded-lg px-4 py-2 shadow-md ${isUser ? 'bg-orange-100 text-gray-900' : 'bg-white text-gray-800'} relative`}
+        className={`rounded-lg px-4 py-2 shadow-md ${isUser ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-800'} relative`}
         onClick={hasFeedback ? onFeedbackClick : undefined}
         style={{ cursor: hasFeedback ? 'pointer' : 'default' }}
       >

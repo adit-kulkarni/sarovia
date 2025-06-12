@@ -213,7 +213,7 @@ export default function LessonSummaryModal({
                         <Dialog.Title
                           as="h2"
                           className="text-3xl font-extrabold text-gray-900 mb-2"
-                          style={{ fontFamily: '"Press Start 2P", monospace' }}
+                          style={{ fontFamily: '"Nunito Sans", sans-serif', fontWeight: 800 }}
                         >
                           🎉 Lesson Complete!
                         </Dialog.Title>
@@ -478,8 +478,9 @@ export default function LessonSummaryModal({
                         onClick={onReturnToDashboard}
                         className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 px-6 rounded-xl transition-colors shadow-lg border-2 border-orange-300"
                         style={{ 
-                          fontFamily: '"Press Start 2P", monospace',
+                          fontFamily: '"Nunito Sans", sans-serif',
                           fontSize: '14px',
+                          fontWeight: 700,
                           textShadow: '1px 1px 0 #fb8c00'
                         }}
                       >

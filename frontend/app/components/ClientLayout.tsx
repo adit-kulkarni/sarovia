@@ -15,7 +15,7 @@ export default function ClientLayout({
   return (
     <>
       {showNavigation && <Navigation />}
-      <main className={`${showNavigation ? 'md:ml-64' : ''} min-h-screen bg-gray-50`}>
+      <main className={`${showNavigation ? 'md:ml-64' : ''} min-h-screen bg-gradient-to-br from-orange-50 via-white to-orange-100`}>
         <div className="p-4 md:p-8">
           {children}
         </div>
