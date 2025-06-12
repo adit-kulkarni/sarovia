@@ -8,16 +8,19 @@ const API_BASE = 'http://localhost:8000';
 
 interface TimelineDataPoint {
   date: string;
-  verbs_total: number;
+  verbs_total?: number;
+  accuracy_rate?: number;
 }
 
-interface VerbProgressResponse {
+interface ProgressMetricResponse {
   timeline_data: TimelineDataPoint[];
   total_snapshots: number;
+  unique_dates: number;
   date_range: {
     start: string | null;
     end: string | null;
   };
+  metric_type: string;
 }
 
 const MetricConfig = {
@@ -26,6 +29,13 @@ const MetricConfig = {
     color: 'rgb(59, 130, 246)', // blue-500
     suffix: ' verbs',
     description: 'Total number of different verbs you know',
+    reverse: false
+  },
+  accuracy_rate: {
+    label: 'Accuracy Rate',
+    color: 'rgb(34, 197, 94)', // green-500
+    suffix: '%',
+    description: 'Percentage of messages with no mistakes',
     reverse: false
   }
 };
@@ -59,7 +69,7 @@ interface PrimaryProgressTimelineProps {
 }
 
 export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryProgressTimelineProps) {
-  const [selectedMetric, setSelectedMetric] = useState<keyof typeof MetricConfig>('verbs_total');
+  const [selectedMetric, setSelectedMetric] = useState<keyof typeof MetricConfig>('accuracy_rate');
   const [selectedPeriod, setSelectedPeriod] = useState<keyof typeof TimePeriodConfig>('month');
   const [timelineData, setTimelineData] = useState<TimelineDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -90,7 +100,7 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
         }
 
         const response = await fetch(
-          `${API_BASE}/api/verb_progress?language=${encodeURIComponent(selectedCurriculum.language)}&curriculum_id=${encodeURIComponent(selectedCurriculum.id)}&limit=100&token=${encodeURIComponent(token)}`
+          `${API_BASE}/api/progress_metrics?metric_type=${encodeURIComponent(selectedMetric)}&language=${encodeURIComponent(selectedCurriculum.language)}&curriculum_id=${encodeURIComponent(selectedCurriculum.id)}&limit=100&token=${encodeURIComponent(token)}`
         );
         
         if (!response.ok) {
@@ -106,10 +116,10 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
           }
         }
         
-        const data: VerbProgressResponse = await response.json();
+        const data: ProgressMetricResponse = await response.json();
         
         if (!data.timeline_data || data.timeline_data.length === 0) {
-          setError('No verb learning progress found yet. Complete some lessons to see your growth!');
+          setError('No progress data found yet. Complete some lessons to see your growth!');
           return;
         }
         
@@ -124,7 +134,7 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
     };
 
     fetchKnowledgeSnapshots();
-  }, [user?.id, selectedCurriculum?.id, selectedCurriculum?.language]);
+  }, [user?.id, selectedCurriculum?.id, selectedCurriculum?.language, selectedMetric]);
 
   const chartData = useMemo(() => {
     const selectedConfig = MetricConfig[selectedMetric];
@@ -154,7 +164,10 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
       // Create a map of actual data points
       const dataMap = new Map<string, number>();
       timelineData.forEach(point => {
-        dataMap.set(point.date, point.verbs_total);
+        const value = selectedMetric === 'verbs_total' ? point.verbs_total : point.accuracy_rate;
+        if (value !== undefined) {
+          dataMap.set(point.date, value);
+        }
       });
 
       // Create chart points only for dates that have data
@@ -247,7 +260,10 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
         for (const week of weekRanges) {
           if (pointDate >= week.startDate && pointDate <= week.endDate) {
             const currentMax = weeklyData.get(week.startDate) || 0;
-            weeklyData.set(week.startDate, Math.max(currentMax, point.verbs_total));
+            const value = selectedMetric === 'verbs_total' ? point.verbs_total : point.accuracy_rate;
+            if (value !== undefined) {
+              weeklyData.set(week.startDate, Math.max(currentMax, value));
+            }
             break;
           }
         }

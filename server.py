@@ -3579,6 +3579,18 @@ class VerbProgressResponse(BaseModel):
     unique_dates: int
     date_range: Dict[str, Optional[str]]
 
+class ProgressMetricDataPoint(BaseModel):
+    date: str
+    verbs_total: Optional[int] = None
+    accuracy_rate: Optional[float] = None
+
+class ProgressMetricResponse(BaseModel):
+    timeline_data: List[ProgressMetricDataPoint]
+    total_snapshots: int
+    unique_dates: int
+    date_range: Dict[str, Optional[str]]
+    metric_type: str
+
 async def analyze_feedback_patterns(user_id: str, curriculum_id: str, days: int = 30) -> dict:
     """Analyze user's feedback patterns over the specified time period"""
     end_date = datetime.now(timezone.utc)
@@ -4504,6 +4516,156 @@ async def get_verb_progress(
     except Exception as e:
         logging.error(f"Error in verb progress endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch verb progress: {str(e)}")
+
+@app.get("/api/progress_metrics", 
+         response_model=ProgressMetricResponse,
+         summary="Get Progress Metrics",
+         description="Retrieve timeline data for various progress metrics (verbs, accuracy, etc.)")
+async def get_progress_metrics(
+    metric_type: str = Query(..., description="Type of metric: 'verbs_total' or 'accuracy_rate'"),
+    language: str = Query(..., description="Language code (e.g., 'es', 'fr', 'de')"),
+    curriculum_id: str = Query(..., description="Curriculum ID for the specific learning path"),
+    limit: int = Query(default=100, description="Maximum number of data points to return", ge=1, le=365),
+    token: str = Query(..., description="JWT authentication token")
+):
+    """
+    Get progress metrics timeline for different metric types.
+    
+    **Supported Metrics:**
+    - `verbs_total`: Total number of unique verbs learned over time
+    - `accuracy_rate`: Percentage of messages with no mistakes over time
+    
+    **Response Format:**
+    - `timeline_data`: Array of date/metric value pairs
+    - `total_snapshots`: Total number of data points found
+    - `unique_dates`: Number of unique dates with data
+    - `date_range`: Start and end dates of the timeline
+    - `metric_type`: The requested metric type
+    """
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        if metric_type == "verbs_total":
+            # Get verb knowledge snapshots
+            verb_snapshots = supabase.table('verb_knowledge_snapshots').select(
+                'snapshot_at, verb_knowledge'
+            ).eq('user_id', user_id).eq('language', language).eq(
+                'curriculum_id', curriculum_id
+            ).order('snapshot_at').limit(limit).execute()
+            
+            if not verb_snapshots.data:
+                return {
+                    "timeline_data": [], 
+                    "total_snapshots": 0,
+                    "unique_dates": 0,
+                    "date_range": {"start": None, "end": None},
+                    "metric_type": metric_type
+                }
+            
+            # Process verb snapshots - group by date and count unique verbs
+            from collections import defaultdict
+            daily_verb_counts = defaultdict(int)
+            
+            for snapshot in verb_snapshots.data:
+                date = snapshot['snapshot_at'][:10]  # Get YYYY-MM-DD
+                verb_knowledge = snapshot.get('verb_knowledge', {})
+                verb_count = len(verb_knowledge) if verb_knowledge else 0
+                # Take maximum count for each date (in case of multiple snapshots per day)
+                daily_verb_counts[date] = max(daily_verb_counts[date], verb_count)
+            
+            # Convert to timeline format
+            timeline_data = []
+            for date in sorted(daily_verb_counts.keys()):
+                timeline_data.append({
+                    'date': date,
+                    'verbs_total': daily_verb_counts[date]
+                })
+            
+            return {
+                "timeline_data": timeline_data,
+                "total_snapshots": len(verb_snapshots.data),
+                "unique_dates": len(daily_verb_counts),
+                "date_range": {
+                    "start": timeline_data[0]['date'] if timeline_data else None,
+                    "end": timeline_data[-1]['date'] if timeline_data else None
+                },
+                "metric_type": metric_type
+            }
+            
+        elif metric_type == "accuracy_rate":
+            # Get messages and their feedback for accuracy calculation
+            messages_query = supabase.table('messages').select(
+                'id, created_at, role, conversations!inner(curriculum_id)'
+            ).eq('role', 'user').eq('conversations.curriculum_id', curriculum_id).order('created_at').limit(limit * 10)
+            
+            messages_result = await db_manager.execute_query(lambda: messages_query.execute())
+            
+            if not messages_result.data:
+                return {
+                    "timeline_data": [], 
+                    "total_snapshots": 0,
+                    "unique_dates": 0,
+                    "date_range": {"start": None, "end": None},
+                    "metric_type": metric_type
+                }
+            
+            # Get feedback for these messages
+            message_ids = [msg['id'] for msg in messages_result.data]
+            feedback_query = supabase.table('message_feedback').select(
+                'message_id, mistakes'
+            ).in_('message_id', message_ids)
+            
+            feedback_result = await db_manager.execute_query(lambda: feedback_query.execute())
+            
+            # Create feedback lookup
+            feedback_map = {}
+            for feedback in feedback_result.data:
+                feedback_map[feedback['message_id']] = feedback.get('mistakes', [])
+            
+            # Group by date and calculate accuracy
+            from collections import defaultdict
+            daily_stats = defaultdict(lambda: {'total': 0, 'perfect': 0})
+            
+            for message in messages_result.data:
+                date = message['created_at'][:10]  # Get YYYY-MM-DD
+                mistakes = feedback_map.get(message['id'], [])
+                
+                daily_stats[date]['total'] += 1
+                if len(mistakes) == 0:  # No mistakes = perfect message
+                    daily_stats[date]['perfect'] += 1
+            
+            # Convert to timeline format
+            timeline_data = []
+            for date in sorted(daily_stats.keys()):
+                stats = daily_stats[date]
+                accuracy = (stats['perfect'] / stats['total']) * 100 if stats['total'] > 0 else 0
+                timeline_data.append({
+                    'date': date,
+                    'accuracy_rate': round(accuracy, 1)
+                })
+            
+            return {
+                "timeline_data": timeline_data,
+                "total_snapshots": len(messages_result.data),
+                "unique_dates": len(daily_stats),
+                "date_range": {
+                    "start": timeline_data[0]['date'] if timeline_data else None,
+                    "end": timeline_data[-1]['date'] if timeline_data else None
+                },
+                "metric_type": metric_type
+            }
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported metric type: {metric_type}")
+            
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error in progress metrics endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch progress metrics: {str(e)}")
 
 
 

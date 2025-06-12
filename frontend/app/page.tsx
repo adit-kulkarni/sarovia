@@ -239,7 +239,7 @@ const ProgressSection = ({
                 : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
             }`}
           >
-            🚀 Timeline
+            🚀 Growth
           </button>
           <button
             onClick={() => setActiveTab('growth')}
@@ -249,7 +249,17 @@ const ProgressSection = ({
                 : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
             }`}
           >
-            📈 Growth
+            🧠 Knowledge
+          </button>
+          <button
+            onClick={() => setActiveTab('data')}
+            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'data'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            📝 Feedback
           </button>
           <button
             onClick={() => setActiveTab('insights')}
@@ -260,16 +270,6 @@ const ProgressSection = ({
             }`}
           >
             💡 Insights
-          </button>
-          <button
-            onClick={() => setActiveTab('data')}
-            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
-              activeTab === 'data'
-                ? 'bg-orange-500 text-white shadow-lg'
-                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-            }`}
-          >
-            📊 Data
           </button>
         </nav>
       </div>
@@ -296,15 +296,6 @@ const ProgressSection = ({
               refreshTrigger={knowledgeRefreshKey}
             />
           </div>
-          
-          {/* Custom Lessons Section */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <WeaknessAnalysis 
-              curriculumId={selectedCurriculum.id} 
-              language={selectedCurriculum.language}
-              token={token || ''}
-            />
-          </div>
         </div>
       )}
 
@@ -317,6 +308,15 @@ const ProgressSection = ({
               language={selectedCurriculum.language}
             />
           )}
+          
+          {/* Custom Lessons Section */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <WeaknessAnalysis 
+              curriculumId={selectedCurriculum.id} 
+              language={selectedCurriculum.language}
+              token={token || ''}
+            />
+          </div>
         </div>
       )}
 
@@ -332,18 +332,6 @@ const ProgressSection = ({
               </div>
             </div>
             
-            {/* Severity Analysis */}
-            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-              <h3 className="text-lg font-medium mb-4">Mistake Severity</h3>
-              <div className="flex-1 overflow-hidden">
-                <SeverityAnalysisChart 
-                  mistakes={allMistakes}
-                  totalConversations={filteredFeedbacks.length}
-                  totalMessages={filteredFeedbacks.length}
-                />
-              </div>
-            </div>
-            
             {/* Common Mistake Types */}
             <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
               <h3 className="text-lg font-medium mb-4">Common Mistakes</h3>
@@ -355,33 +343,11 @@ const ProgressSection = ({
 
           {/* Right Column */}
           <div className="space-y-6">
-            {/* Progress Over Time */}
-            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-              <h3 className="text-lg font-medium mb-4">Progress Over Time</h3>
-              <div className="flex-1 overflow-hidden">
-                <ProgressOverTimeChart 
-                  mistakes={allMistakes}
-                  feedbacks={filteredFeedbacks.map(f => ({
-                    timestamp: f.created_at || f.timestamp,
-                    mistakes: f.mistakes
-                  }))}
-                />
-              </div>
-            </div>
-            
             {/* Language Feature Analysis */}
             <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
               <h3 className="text-lg font-medium mb-4">Language Features</h3>
               <div className="flex-1 overflow-y-auto">
                 <LanguageFeaturesHeatmap mistakes={allMistakes} />
-              </div>
-            </div>
-            
-            {/* Context Performance */}
-            <div className="bg-white rounded-lg shadow p-6 h-[400px] flex flex-col">
-              <h3 className="text-lg font-medium mb-4">Mistakes per 30-Message Conversation</h3>
-              <div className="flex-1 overflow-hidden">
-                <ScaledMistakesPerConversationChart feedbacks={filteredFeedbacks} />
               </div>
             </div>
           </div>
