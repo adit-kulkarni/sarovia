@@ -11,6 +11,7 @@ import CommonMistakesList from './components/CommonMistakesList';
 import ProgressOverTimeChart from './components/ProgressOverTimeChart';
 import ScaledMistakesPerConversationChart from './components/ScaledMistakesPerConversationChart';
 import LanguageFeaturesHeatmap from './components/LanguageFeaturesHeatmap';
+import PrimaryProgressTimeline from './components/PrimaryProgressTimeline';
 import CorrectionPatterns from './components/CorrectionPatterns';
 import ProficiencyLevelChart from './components/ProficiencyLevelChart';
 import { createClient } from '@supabase/supabase-js';
@@ -200,7 +201,7 @@ const ProgressSection = ({
   knowledgeRefreshKey: number;
   token: string | null;
 }) => {
-  const [activeTab, setActiveTab] = useState('growth');
+  const [activeTab, setActiveTab] = useState('timeline');
   
   // Get all mistakes from feedbacks
   const allMistakes = filteredFeedbacks.reduce((acc, feedback) => [...acc, ...feedback.mistakes], [] as Mistake[]);
@@ -229,10 +230,20 @@ const ProgressSection = ({
       
       {/* Tab Navigation */}
       <div className="mb-8">
-        <nav className="flex justify-center space-x-4">
+        <nav className="flex justify-center space-x-3">
+          <button
+            onClick={() => setActiveTab('timeline')}
+            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
+              activeTab === 'timeline'
+                ? 'bg-orange-500 text-white shadow-lg'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+          >
+            🚀 Timeline
+          </button>
           <button
             onClick={() => setActiveTab('growth')}
-            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'growth'
                 ? 'bg-orange-500 text-white shadow-lg'
                 : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
@@ -242,7 +253,7 @@ const ProgressSection = ({
           </button>
           <button
             onClick={() => setActiveTab('insights')}
-            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'insights'
                 ? 'bg-orange-500 text-white shadow-lg'
                 : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
@@ -252,7 +263,7 @@ const ProgressSection = ({
           </button>
           <button
             onClick={() => setActiveTab('data')}
-            className={`py-4 px-8 rounded-full font-bold text-lg transition-all duration-200 ${
+            className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'data'
                 ? 'bg-orange-500 text-white shadow-lg'
                 : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
@@ -264,6 +275,17 @@ const ProgressSection = ({
       </div>
 
       {/* Tab Content */}
+      {activeTab === 'timeline' && (
+        <div className="space-y-6">
+          {/* Primary Progress Timeline */}
+          <div className="bg-white rounded-lg shadow p-6 h-[600px] flex flex-col">
+            <PrimaryProgressTimeline 
+              selectedCurriculum={selectedCurriculum}
+            />
+          </div>
+        </div>
+      )}
+
       {activeTab === 'growth' && (
         <div className="space-y-6">
           {/* Your Knowledge Panel */}

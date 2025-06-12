@@ -3569,6 +3569,16 @@ class InsightsResponse(BaseModel):
     analysis_period: str
     summary: dict
 
+class VerbProgressDataPoint(BaseModel):
+    date: str
+    verbs_total: int
+
+class VerbProgressResponse(BaseModel):
+    timeline_data: List[VerbProgressDataPoint]
+    total_snapshots: int
+    unique_dates: int
+    date_range: Dict[str, Optional[str]]
+
 async def analyze_feedback_patterns(user_id: str, curriculum_id: str, days: int = 30) -> dict:
     """Analyze user's feedback patterns over the specified time period"""
     end_date = datetime.now(timezone.utc)
@@ -4420,6 +4430,81 @@ async def generate_conversation_achievements(user_id: str, conversation_id: str,
         
     except Exception as e:
         logging.error(f"[Post-Conversation] Error generating achievements: {e}")
+
+@app.get("/api/verb_progress", 
+         response_model=VerbProgressResponse,
+         summary="Get Verb Learning Progress",
+         description="Retrieve a timeline of verb learning progress showing daily verb counts over time")
+async def get_verb_progress(
+    language: str = Query(..., description="Language code (e.g., 'es', 'fr', 'de')"),
+    curriculum_id: str = Query(..., description="Curriculum ID for the specific learning path"),
+    limit: int = Query(default=100, description="Maximum number of snapshots to return", ge=1, le=365),
+    token: str = Query(..., description="JWT authentication token")
+):
+    """
+    Get verb learning progress timeline from verb knowledge snapshots.
+    
+    Returns daily aggregated data showing the total number of unique verbs
+    learned over time. Data is grouped by date, taking the maximum verb
+    count for each day if multiple snapshots exist.
+    
+    **Response Format:**
+    - `timeline_data`: Array of date/verb count pairs
+    - `total_snapshots`: Total number of snapshots found
+    - `unique_dates`: Number of unique dates with data
+    - `date_range`: Start and end dates of the timeline
+    """
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Get verb knowledge snapshots
+        verb_snapshots = supabase.table('verb_knowledge_snapshots').select(
+            'snapshot_at, verb_knowledge'
+        ).eq('user_id', user_id).eq('language', language).eq(
+            'curriculum_id', curriculum_id
+        ).order('snapshot_at').limit(limit).execute()
+        
+        if not verb_snapshots.data:
+            return {"timeline_data": [], "message": "No verb progress data found"}
+        
+        # Process verb snapshots - group by date and count unique verbs
+        from collections import defaultdict
+        daily_verb_counts = defaultdict(int)
+        
+        for snapshot in verb_snapshots.data:
+            date = snapshot['snapshot_at'][:10]  # Get YYYY-MM-DD
+            verb_knowledge = snapshot.get('verb_knowledge', {})
+            verb_count = len(verb_knowledge) if verb_knowledge else 0
+            # Take maximum count for each date (in case of multiple snapshots per day)
+            daily_verb_counts[date] = max(daily_verb_counts[date], verb_count)
+        
+        # Convert to timeline format
+        timeline_data = []
+        for date in sorted(daily_verb_counts.keys()):
+            timeline_data.append({
+                'date': date,
+                'verbs_total': daily_verb_counts[date]
+            })
+        
+        return {
+            "timeline_data": timeline_data,
+            "total_snapshots": len(verb_snapshots.data),
+            "unique_dates": len(daily_verb_counts),
+            "date_range": {
+                "start": timeline_data[0]['date'] if timeline_data else None,
+                "end": timeline_data[-1]['date'] if timeline_data else None
+            }
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error in verb progress endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch verb progress: {str(e)}")
+
 
 
 
