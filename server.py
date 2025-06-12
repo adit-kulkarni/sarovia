@@ -669,8 +669,17 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
             if event_type in ['response.audio.delta', 'response.audio.done', 'input_audio_buffer.speech_started']:
                 await client_ws.send_json(data)
                 continue
-            # Forward all events to client for debugging (optional)
-            await client_ws.send_json(data)
+            
+            # Forward AI transcript events (needed for frontend to display AI messages)
+            # but block user transcript events (handled by server to prevent duplicates)
+            if event_type == 'response.audio_transcript.done':
+                await client_ws.send_json(data)
+                continue
+            
+            # Forward other specific events for debugging
+            debug_events = ['session.created', 'session.updated', 'error', 'rate_limits.updated']
+            if event_type in debug_events:
+                await client_ws.send_json(data)
             # Only after OpenAI session.created, create conversation and notify frontend
             if event_type == 'session.created' and not openai_session_confirmed:
                 openai_session_confirmed = True
