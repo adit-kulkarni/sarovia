@@ -1,8 +1,8 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
-import { XMarkIcon, TrophyIcon, StarIcon } from '@heroicons/react/24/solid';
+import { XMarkIcon, TrophyIcon, StarIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/solid';
 
 interface Achievement {
   id: string;
@@ -24,6 +24,24 @@ interface MistakeSummary {
   }>;
 }
 
+interface Mistake {
+  category: string;
+  type: string;
+  error: string;
+  correction: string;
+  explanation: string;
+  severity: string;
+  languageFeatureTags?: string[];
+}
+
+interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  feedback?: Mistake[];
+}
+
 interface LessonSummaryData {
   lessonTitle: string;
   totalTurns: number;
@@ -34,6 +52,7 @@ interface LessonSummaryData {
   wordsUsed: number;
   newVocabulary: string[];
   improvementAreas: string[];
+  conversationId?: string;
 }
 
 interface LessonSummaryModalProps {
@@ -42,6 +61,7 @@ interface LessonSummaryModalProps {
   onReturnToDashboard: () => void;
   summaryData: LessonSummaryData | null;
   loading?: boolean;
+  token: string | null;
 }
 
 const severityColors = {
@@ -55,11 +75,103 @@ export default function LessonSummaryModal({
   onClose, 
   onReturnToDashboard, 
   summaryData,
-  loading = false 
+  loading = false,
+  token
 }: LessonSummaryModalProps) {
-  const [currentView, setCurrentView] = useState<'achievements' | 'mistakes'>('achievements');
+  const [currentView, setCurrentView] = useState<'achievements' | 'mistakes' | 'conversation'>('achievements');
+  const [conversationData, setConversationData] = useState<ConversationMessage[]>([]);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+
+  // Clear conversation data when conversationId changes
+  useEffect(() => {
+    setConversationData([]);
+    setConversationError(null);
+  }, [summaryData?.conversationId]);
+
+  // Clear conversation data when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setConversationData([]);
+      setConversationError(null);
+    }
+  }, [isOpen]);
+
+  // Load conversation data when conversation tab is selected
+  useEffect(() => {
+    if (currentView === 'conversation' && summaryData?.conversationId && conversationData.length === 0) {
+      loadConversationData();
+    }
+  }, [currentView, summaryData?.conversationId, conversationData.length]);
+
+  const loadConversationData = async () => {
+    if (!summaryData?.conversationId) return;
+
+    setConversationLoading(true);
+    setConversationError(null);
+
+    try {
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      const url = `http://localhost:8000/api/conversations/${summaryData.conversationId}/review?token=${encodeURIComponent(token)}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to load conversation: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      // Merge feedback data with messages
+      const messagesWithFeedback = (data.messages || []).map((message: any) => {
+        const feedback = data.feedback?.[message.id];
+        return {
+          ...message,
+          feedback: feedback?.mistakes || []
+        };
+      });
+      
+      setConversationData(messagesWithFeedback);
+    } catch (error) {
+      console.error('Error loading conversation:', error);
+      setConversationError(error instanceof Error ? error.message : 'Failed to load conversation');
+    } finally {
+      setConversationLoading(false);
+    }
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    try {
+      return new Date(timestamp).toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+    } catch {
+      return '';
+    }
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity?.toLowerCase()) {
+      case 'critical': return 'bg-red-100 text-red-800 border-red-200';
+      case 'moderate': return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'minor': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
 
   if (!summaryData && !loading) return null;
+
+
 
   return (
     <Transition appear show={isOpen} as={Fragment}>
@@ -160,6 +272,16 @@ export default function LessonSummaryModal({
                       >
                         📚 Learning Areas
                       </button>
+                      <button
+                        onClick={() => setCurrentView('conversation')}
+                        className={`flex-1 py-3 px-4 rounded-lg font-semibold transition-all ${
+                          currentView === 'conversation'
+                            ? 'bg-orange-500 text-white shadow-lg'
+                            : 'text-gray-600 hover:text-orange-600'
+                        }`}
+                      >
+                        💬 Conversation Review
+                      </button>
                     </div>
 
                     {/* Content */}
@@ -253,6 +375,97 @@ export default function LessonSummaryModal({
                             <div className="text-center py-12 text-green-600">
                               <StarIcon className="h-16 w-16 mx-auto mb-4 text-green-400" />
                               <p className="font-semibold">Perfect lesson! No corrections needed.</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {currentView === 'conversation' && (
+                        <div>
+                          <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                            <ChatBubbleLeftRightIcon className="h-6 w-6 text-orange-500 mr-2" />
+                            Conversation Review
+                          </h3>
+                          
+                          {conversationLoading ? (
+                            <div className="flex flex-col items-center justify-center py-12">
+                              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-orange-500 mb-4"></div>
+                              <p className="text-gray-600">Loading conversation...</p>
+                            </div>
+                          ) : conversationError ? (
+                            <div className="text-center py-12">
+                              <div className="text-red-500 mb-4">
+                                <ChatBubbleLeftRightIcon className="h-16 w-16 mx-auto mb-2 text-red-300" />
+                                <p className="font-semibold">Unable to load conversation</p>
+                                <p className="text-sm text-gray-600 mt-1">{conversationError}</p>
+                              </div>
+                              <button
+                                onClick={loadConversationData}
+                                className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+                              >
+                                Try Again
+                              </button>
+                            </div>
+                          ) : conversationData.length === 0 ? (
+                            <div className="text-center py-12 text-gray-500">
+                              <ChatBubbleLeftRightIcon className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                              <p>No conversation history available for this lesson.</p>
+                            </div>
+                          ) : (
+                            <div className="bg-white rounded-xl border-2 border-gray-200 max-h-96 overflow-y-auto">
+                              <div className="p-4 space-y-4">
+                                {conversationData.map((message) => (
+                                  <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                                      message.role === 'user' 
+                                        ? 'bg-orange-500 text-white' 
+                                        : 'bg-gray-200 text-gray-800'
+                                    }`}>
+                                      <div className="text-sm">{message.content}</div>
+                                      {message.timestamp && (
+                                        <div className={`text-xs mt-1 ${
+                                          message.role === 'user' ? 'text-orange-100' : 'text-gray-500'
+                                        }`}>
+                                          {formatTimestamp(message.timestamp)}
+                                        </div>
+                                      )}
+                                      
+                                      {/* Feedback for user messages */}
+                                      {message.role === 'user' && message.feedback && message.feedback.length > 0 && (
+                                        <div className="mt-3 space-y-2">
+                                          {message.feedback.map((mistake, index) => (
+                                            <div key={index} className="bg-white rounded-lg p-3 text-gray-800 shadow-sm">
+                                              <div className="flex items-center justify-between mb-2">
+                                                <span className="text-xs font-semibold text-gray-600 uppercase">
+                                                  {mistake.category} - {mistake.type}
+                                                </span>
+                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${getSeverityColor(mistake.severity)}`}>
+                                                  {mistake.severity}
+                                                </span>
+                                              </div>
+                                              <div className="text-sm mb-2">
+                                                <span className="line-through text-red-600">{mistake.error}</span>
+                                                <span className="mx-2">→</span>
+                                                <span className="text-green-600 font-semibold">{mistake.correction}</span>
+                                              </div>
+                                              <p className="text-xs text-gray-600 mb-2">{mistake.explanation}</p>
+                                              {mistake.languageFeatureTags && mistake.languageFeatureTags.length > 0 && (
+                                                <div className="flex flex-wrap gap-1">
+                                                  {mistake.languageFeatureTags.map((tag, tagIndex) => (
+                                                    <span key={tagIndex} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                                      {tag}
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </div>

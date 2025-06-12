@@ -1283,6 +1283,45 @@ async def get_conversation_messages(conversation_id: str, token: str = Query(...
         logging.error(f"Error getting conversation messages: {e}")
         raise
 
+@app.get("/api/conversations/{conversation_id}/review")
+async def get_conversation_review(conversation_id: str, token: str = Query(...)):
+    """Get conversation messages with their feedback for review purposes - optimized single query approach"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        # Verify the conversation belongs to the user
+        conversation = supabase.table('conversations').select('id').eq('id', conversation_id).eq('user_id', user_id).execute()
+        if not conversation.data:
+            raise Exception("Conversation not found or access denied")
+        
+        # Get all messages for the conversation
+        messages_result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at', desc=False).execute()
+        messages = messages_result.data
+        
+        if not messages:
+            return {"messages": [], "feedback": {}}
+        
+        # Get all message IDs for feedback lookup
+        message_ids = [msg['id'] for msg in messages]
+        
+        # Get all feedback for these messages in a single query
+        feedback_result = supabase.table('message_feedback').select('*').in_('message_id', message_ids).execute()
+        
+        # Create feedback lookup map
+        feedback_map = {}
+        for feedback in feedback_result.data:
+            feedback_map[feedback['message_id']] = feedback
+        
+        return {
+            "messages": messages,
+            "feedback": feedback_map
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting conversation review: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 async def generate_hint(level: str, context: str, language: str, conversation_history: list) -> str:
     """Generate a conversation hint using OpenAI's chat completions API"""
     try:
@@ -2981,14 +3020,8 @@ async def get_lesson_progress_by_lesson(
         if not curriculum.data:
             raise HTTPException(status_code=404, detail="Curriculum not found")
         
-        # Convert lesson_id to int since lesson_templates uses integer IDs
-        try:
-            lesson_id_int = int(lesson_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid lesson ID format")
-        
-        # Get progress for this lesson
-        progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('lesson_id', lesson_id_int).eq('curriculum_id', curriculum_id).execute()
+        # Get progress for this lesson (lesson_id is UUID, not integer)
+        progress = supabase.table('lesson_progress').select('*').eq('user_id', user_id).eq('lesson_id', lesson_id).eq('curriculum_id', curriculum_id).execute()
         
         if not progress.data:
             return {"status": "not_started", "turns_completed": 0, "required_turns": 7}

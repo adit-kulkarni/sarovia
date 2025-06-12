@@ -95,6 +95,7 @@ interface LessonSummaryData {
   wordsUsed: number;
   newVocabulary: string[];
   improvementAreas: string[];
+  conversationId?: string;
 }
 
 interface Achievement {
@@ -529,9 +530,10 @@ const Dashboard = () => {
   const [lessonSummaryData, setLessonSummaryData] = useState<LessonSummaryData | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingSummaryMap, setLoadingSummaryMap] = useState<Record<string, boolean>>({});
-  const [showCompletedLessons, setShowCompletedLessons] = useState(false);
+  const [showCompletedLessons, setShowCompletedLessons] = useState(true);
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
+
   const [insights, setInsights] = useState(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const router = useRouter();
@@ -740,6 +742,8 @@ const Dashboard = () => {
     setLessonSummaryData(null);
   };
 
+
+
   useEffect(() => {
     const fetchFeedback = async () => {
       setFeedbackLoading(true);
@@ -891,7 +895,7 @@ const Dashboard = () => {
                 <div
                   key={lesson.id}
                   className={`flex flex-col justify-between ${isCompact ? 'min-w-[260px] max-w-[280px]' : 'min-w-[320px] max-w-[340px]'} bg-white rounded-2xl shadow-lg border p-0 overflow-hidden ${
-                    isCompleted ? 'border-green-200' : isInProgress ? 'border-orange-200' : 'border-gray-100'
+                    isCompleted ? 'border-gray-300' : isInProgress ? 'border-orange-200' : 'border-gray-100'
                   }`}
                   style={{ boxShadow: '0 4px 24px 0 rgba(255,140,0,0.08)' }}
                 >
@@ -900,7 +904,7 @@ const Dashboard = () => {
                     <div className={`${isCompact ? 'px-4 pt-2' : 'px-5 pt-3'}`}>
                       <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                         isCompleted 
-                          ? 'bg-green-100 text-green-800' 
+                          ? 'bg-gray-100 text-gray-800' 
                           : isInProgress 
                             ? 'bg-orange-100 text-orange-800' 
                             : 'bg-gray-100 text-gray-800'
@@ -947,7 +951,7 @@ const Dashboard = () => {
                   <div className={`${isCompact ? 'px-4 h-14' : 'px-5 h-16'} flex items-center justify-end border-t border-gray-100 bg-gray-50 gap-2`}>
                     {isCompleted && (
                       <button
-                        className={`${isCompact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors bg-blue-500 hover:bg-blue-600 text-white`}
+                        className={`${isCompact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors bg-orange-300 hover:bg-orange-400 text-orange-800`}
                         onClick={() => handleViewReportCard(lesson.id)}
                         disabled={loadingSummaryMap[lesson.id]}
                       >
@@ -957,12 +961,12 @@ const Dashboard = () => {
                     <button
                       className={`${isCompact ? 'px-4 py-1.5 text-xs' : 'px-5 py-2 text-sm'} rounded-lg font-semibold shadow transition-colors ${
                         isCompleted 
-                          ? 'bg-green-500 hover:bg-green-600 text-white' 
+                          ? 'bg-orange-500 hover:bg-orange-600 text-white' 
                           : isInProgress 
                             ? 'bg-orange-500 hover:bg-orange-600 text-white' 
                             : 'bg-orange-500 hover:bg-orange-600 text-white'
                       }`}
-                      onClick={() => handleStartLesson(lesson.id)}
+                                                  onClick={() => isCompleted ? handleViewReportCard(lesson.id) : handleStartLesson(lesson.id)}
                     >
                       {isCompleted ? 'Review Lesson' : isInProgress ? 'Continue Lesson' : 'Start Lesson'}
                     </button>
@@ -1008,24 +1012,21 @@ const Dashboard = () => {
                   <div className="mb-4">
                     <button
                       onClick={() => setShowCompletedLessons(!showCompletedLessons)}
-                      className="w-full mb-4 p-4 bg-green-50 hover:bg-green-100 border-2 border-green-200 rounded-xl transition-colors duration-200 focus:outline-none focus:ring-4 focus:ring-green-100"
+                      className="w-full mb-4 p-4 bg-orange-50 hover:bg-orange-100 border-2 border-orange-200 rounded-xl transition-colors duration-200 focus:outline-none focus:ring-4 focus:ring-orange-100"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="bg-green-500 text-white rounded-full p-2">
-                            ✅
-                          </div>
                           <div className="text-left">
-                            <h3 className="text-lg font-bold text-green-800">
+                            <h3 className="text-lg font-bold text-orange-800">
                               Completed Lessons ({allCompletedLessons.length})
                             </h3>
-                            <p className="text-sm text-green-600">
+                            <p className="text-sm text-orange-600">
                               Great job! Click to view your completed lessons
                             </p>
                           </div>
                         </div>
                         <div className={`transform transition-transform duration-200 ${showCompletedLessons ? 'rotate-180' : ''}`}>
-                          <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </div>
@@ -1034,7 +1035,7 @@ const Dashboard = () => {
                     
                     {/* Expanded Completed Lessons */}
                     {showCompletedLessons && (
-                      <div className="flex space-x-4 overflow-x-auto pb-2 bg-green-50/50 rounded-xl p-4 border border-green-200" style={{ WebkitOverflowScrolling: 'touch' }}>
+                      <div className="flex space-x-4 overflow-x-auto pb-2 bg-gray-50 rounded-xl p-4 border border-gray-200" style={{ WebkitOverflowScrolling: 'touch' }}>
                         {allCompletedLessons.map(lesson => renderLessonCard(lesson, true))}
                       </div>
                     )}
@@ -1307,7 +1308,10 @@ const Dashboard = () => {
         onReturnToDashboard={handleCloseLessonSummary}
         summaryData={lessonSummaryData}
         loading={loadingSummary}
+        token={token}
       />
+
+
 
       {error && (
         <div className="mt-6 text-red-500 text-center">{error}</div>

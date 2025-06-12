@@ -252,6 +252,12 @@ async def generate_optimized_lesson_summary(lesson_progress_id: str) -> Dict:
         turns_completed = lesson_data.get('turns_completed', 0)
         required_turns = lesson_data.get('required_turns', 7)
         
+        # Debug logging
+        logger.info(f"[Lesson Summary] Progress ID: {lesson_progress_id}")
+        logger.info(f"[Lesson Summary] Lesson ID: {lesson_id}")
+        logger.info(f"[Lesson Summary] Conversation ID: {conversation_id}")
+        logger.info(f"[Lesson Summary] Turns completed: {turns_completed}")
+        
         # Get lesson title separately
         lesson_title = "Unknown Lesson"
         if lesson_id:
@@ -302,10 +308,12 @@ async def generate_optimized_lesson_summary(lesson_progress_id: str) -> Dict:
             "conversationDuration": conversation_duration,
             "wordsUsed": estimate_words_used(turns_completed),
             "newVocabulary": extract_new_vocabulary(before_verbs, after_verbs),
-            "improvementAreas": generate_improvement_areas(mistake_data['mistakes_by_category'])
+            "improvementAreas": generate_improvement_areas(mistake_data['mistakes_by_category']),
+            "conversationId": conversation_id
         }
         
         logger.info(f"Generated optimized lesson summary for {lesson_title} in <1 second!")
+        logger.info(f"[Lesson Summary] Response includes conversationId: {conversation_id}")
         return summary
         
     except Exception as e:
