@@ -697,7 +697,8 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     logging.info(f"[Handler {handler_id}] OpenAI session.created confirmed, conversation_id: {conversation_id}, user_id: {user_id}")
                 else:
                     logging.warning(f"[Handler {handler_id}] Duplicate OpenAI session.created event ignored.")
-                # Now send session config and response.create to OpenAI
+                
+                # Now send session config and response.create to OpenAI (AFTER conversation is ready)
                 instructions_to_send = custom_instructions if custom_instructions else get_level_specific_instructions(level, context, language)
                 logging.info(f"[Handler {handler_id}] Sending session.update with instructions:\n{instructions_to_send}")
                 # Configure turn detection based on VAD settings
@@ -748,18 +749,24 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     }
                 }
                 await forward_to_openai(ws, session_config)
-                response_create = {
-                    "type": "response.create",
-                    "response": {
-                        "modalities": ["text", "audio"],
-                        "output_audio_format": "pcm16",
-                        "temperature": 0.8,
-                        "max_output_tokens": 4096
+                
+                # DELAY: Wait for conversation to be created before sending response.create
+                # This ensures conversation_id is ready before OpenAI starts listening for user messages
+                if conversation_id:
+                    response_create = {
+                        "type": "response.create",
+                        "response": {
+                            "modalities": ["text", "audio"],
+                            "output_audio_format": "pcm16",
+                            "temperature": 0.8,
+                            "max_output_tokens": 4096
+                        }
                     }
-                }
-                await forward_to_openai(ws, response_create)
-                response_created = True
-                logging.info(f"[Handler {handler_id}] response.create sent. Guard flag set to True.")
+                    await forward_to_openai(ws, response_create)
+                    response_created = True
+                    logging.info(f"[Handler {handler_id}] response.create sent AFTER conversation ready. Guard flag set to True.")
+                else:
+                    logging.error(f"[Handler {handler_id}] Cannot send response.create - conversation_id not ready")
             # Save assistant messages (final transcript) and update turn count
             elif event_type == 'response.audio_transcript.done' and conversation_id:
                 transcript = data.get('transcript', '')
@@ -780,22 +787,31 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
                 if transcript:
-                    async def save_and_generate_feedback_and_emit():
+                    # Generate message ID upfront for immediate display
+                    message_id = str(uuid.uuid4())
+                    
+                    # IMMEDIATELY send to frontend for instant display (non-blocking)
+                    logging.info(f"[WebSocket] Immediately emitting user message for instant display: message_id={message_id}, transcript={transcript}")
+                    await client_ws.send_json({
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "message_id": message_id,
+                        "transcript": transcript
+                    })
+                    
+                    # Save to DB and generate feedback in background (non-blocking)
+                    async def save_and_generate_feedback_background():
                         try:
-                            message_result = await save_message(conversation_id, 'user', transcript)
-                            if message_result and message_result.data:
-                                message_id = message_result.data[0]['id']
-                                logging.info(f"[WebSocket] Emitting user message event for message_id={message_id}, transcript={transcript}")
-                                await client_ws.send_json({
-                                    "type": "conversation.item.input_audio_transcription.completed",
-                                    "message_id": message_id,
-                                    "transcript": transcript
-                                })
-                                asyncio.create_task(process_feedback_background(message_id, language, level, client_ws, INTERACTION_MODE))
-                                logging.info(f"[WebSocket] Started background feedback generation for message_id={message_id}")
+                            # Save with pre-generated ID
+                            await save_message_with_id(conversation_id, 'user', transcript, message_id)
+                            logging.info(f"[Background] Saved user message to DB: message_id={message_id}")
+                            
+                            # Generate feedback in background
+                            asyncio.create_task(process_feedback_background(message_id, language, level, client_ws, INTERACTION_MODE))
+                            logging.info(f"[Background] Started feedback generation for message_id={message_id}")
                         except Exception as e:
-                            logging.error(f"[WebSocket] Error in save_and_generate_feedback_and_emit: {e}")
-                    asyncio.create_task(save_and_generate_feedback_and_emit())
+                            logging.error(f"[Background] Error in save_and_generate_feedback: {e}")
+                    
+                    asyncio.create_task(save_and_generate_feedback_background())
                     pending_user_message = True
                     logging.info(f"[Handler {handler_id}] User message received - pending AI response for turn completion")
     except Exception as e:
@@ -844,6 +860,27 @@ async def save_message(conversation_id: str, role: str, content: str):
         return result
     except Exception as e:
         logging.error(f"Error saving message: {e}")
+        raise
+
+async def save_message_with_id(conversation_id: str, role: str, content: str, message_id: str):
+    """Save a message to the database with a specific ID"""
+    try:
+        logging.debug(f"[save_message_with_id] id={message_id}, conversation_id={conversation_id}, role={role}, content={content}")
+        
+        # Use database manager for async execution
+        def insert_message():
+            return supabase.table('messages').insert({
+                'id': message_id,
+                'conversation_id': conversation_id,
+                'role': role,
+                'content': content
+            }).execute()
+        
+        result = await db_manager.execute_query(insert_message)
+        logging.debug(f"[save_message_with_id] result: {result}")
+        return result
+    except Exception as e:
+        logging.error(f"Error saving message with ID {message_id}: {e}")
         raise
 
 def get_required_turns_for_difficulty(difficulty: str) -> int:
