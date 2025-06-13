@@ -729,8 +729,9 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
             # Forward AI transcript events (needed for frontend to display AI messages)
             # but block user transcript events (handled by server to prevent duplicates)
             if event_type == 'response.audio_transcript.done':
+                logging.info(f"[Handler {handler_id}] Forwarding response.audio_transcript.done to frontend: {data}")
                 await client_ws.send_json(data)
-                continue
+                # Don't continue here - we need to process this event for saving to DB
             
             # Forward other specific events for debugging
             debug_events = ['session.created', 'session.updated', 'error', 'rate_limits.updated']
@@ -825,9 +826,24 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     logging.error(f"[Handler {handler_id}] Cannot send response.create - conversation_id not ready")
             # Save assistant messages (final transcript) and update turn count
             elif event_type == 'response.audio_transcript.done' and conversation_id:
+                logging.info(f"[Handler {handler_id}] Received response.audio_transcript.done event")
                 transcript = data.get('transcript', '')
+                logging.info(f"[Handler {handler_id}] Assistant transcript: '{transcript}' (length: {len(transcript)})")
                 if transcript:
-                    asyncio.create_task(save_message(conversation_id, 'assistant', transcript))
+                    # Generate message ID upfront for consistency with user messages
+                    message_id = str(uuid.uuid4())
+                    
+                    # Save assistant message with better error handling
+                    async def save_assistant_message_background():
+                        try:
+                            logging.info(f"[Handler {handler_id}] About to save assistant message to DB: message_id={message_id}")
+                            await save_message_with_id(conversation_id, 'assistant', transcript, message_id)
+                            logging.info(f"[Handler {handler_id}] Successfully saved assistant message: {transcript[:50]}...")
+                        except Exception as e:
+                            logging.error(f"[Handler {handler_id}] Failed to save assistant message: {e}")
+                    
+                    asyncio.create_task(save_assistant_message_background())
+                    
                     # Only increment turn count if there was a pending user message (complete exchange)
                     if pending_user_message:
                         current_turns += 1
@@ -839,6 +855,8 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                         # Real-time updates removed to keep conversation fluent
                     else:
                         logging.info(f"[Handler {handler_id}] AI response without pending user message - no turn increment")
+                else:
+                    logging.warning(f"[Handler {handler_id}] Empty transcript in response.audio_transcript.done event")
             # Save user messages (transcription) and generate feedback
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
@@ -901,7 +919,7 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
 async def save_message(conversation_id: str, role: str, content: str):
     """Save a message to the database and return the result"""
     try:
-        logging.debug(f"[save_message] conversation_id={conversation_id}, role={role}, content={content}")
+        logging.info(f"[save_message] Attempting to save {role} message: conversation_id={conversation_id}, content_length={len(content)}")
         
         # Use database manager for async execution
         def insert_message():
@@ -912,16 +930,16 @@ async def save_message(conversation_id: str, role: str, content: str):
             }).execute()
         
         result = await db_manager.execute_query(insert_message)
-        logging.debug(f"[save_message] result: {result}")
+        logging.info(f"[save_message] Successfully saved {role} message: {result.data[0]['id'] if result.data else 'no_id'}")
         return result
     except Exception as e:
-        logging.error(f"Error saving message: {e}")
+        logging.error(f"Error saving {role} message for conversation {conversation_id}: {e}")
         raise
 
 async def save_message_with_id(conversation_id: str, role: str, content: str, message_id: str):
     """Save a message to the database with a specific ID"""
     try:
-        logging.debug(f"[save_message_with_id] id={message_id}, conversation_id={conversation_id}, role={role}, content={content}")
+        logging.info(f"[save_message_with_id] Attempting to save {role} message: id={message_id}, conversation_id={conversation_id}, content_length={len(content)}")
         
         # Use database manager for async execution
         def insert_message():
@@ -933,10 +951,10 @@ async def save_message_with_id(conversation_id: str, role: str, content: str, me
             }).execute()
         
         result = await db_manager.execute_query(insert_message)
-        logging.debug(f"[save_message_with_id] result: {result}")
+        logging.info(f"[save_message_with_id] Successfully saved {role} message: {result.data[0]['id'] if result.data else 'no_id'}")
         return result
     except Exception as e:
-        logging.error(f"Error saving message with ID {message_id}: {e}")
+        logging.error(f"Error saving {role} message with ID {message_id}: {e}")
         raise
 
 def get_required_turns_for_difficulty(difficulty: str) -> int:
