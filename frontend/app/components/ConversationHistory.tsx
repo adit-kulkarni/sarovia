@@ -50,7 +50,8 @@ export default function ConversationHistory() {
           return;
         }
 
-        const response = await fetch(`http://localhost:8000/api/conversations?token=${session.access_token}`);
+        const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/api/conversations?token=${session.access_token}`);
         if (!response.ok) {
           throw new Error('Failed to fetch conversations');
         }

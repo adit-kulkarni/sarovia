@@ -203,7 +203,7 @@ const contextCards: ContextCard[] = [
   }
 ];
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
 const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const languagesList = [

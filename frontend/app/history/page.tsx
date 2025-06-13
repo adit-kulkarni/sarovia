@@ -124,7 +124,8 @@ const HistoryPage = () => {
         throw new Error('No authentication token found');
       }
 
-      const url = `http://localhost:8000/api/conversations/${conversationId}/review?token=${encodeURIComponent(token)}`;
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const url = `${API_BASE}/api/conversations/${conversationId}/review?token=${encodeURIComponent(token)}`;
 
       const response = await fetch(url, {
         method: 'GET',

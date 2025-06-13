@@ -31,7 +31,7 @@ const languageNames: { [key: string]: string } = {
   kn: 'Kannada'
 };
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
 function ChatComponent() {
   const [isRecording, setIsRecording] = useState(false);
@@ -459,7 +459,8 @@ function ChatComponent() {
         const { data } = await supabase.auth.getSession();
         const token = data?.session?.access_token;
         if (!isMounted) return;
-        ws = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
+        const wsUrl = API_BASE.replace('http://', 'ws://').replace('https://', 'wss://');
+        ws = new WebSocket(`${wsUrl}/ws?token=${token}`);
         ws.onopen = () => {
           console.log('[Chat] WebSocket connected');
           setIsConnected(true);
@@ -767,7 +768,7 @@ function ChatComponent() {
         return;
       }
 
-      const url = `http://localhost:8000/api/hint?token=${session.access_token}`;
+              const url = `${API_BASE}/api/hint?token=${session.access_token}`;
       const body = { conversation_id };
       console.log('Sending hint request:', { url, body });
       

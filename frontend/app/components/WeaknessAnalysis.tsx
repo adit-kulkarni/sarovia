@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { TrashIcon } from '@heroicons/react/24/solid';
 import { useRouter } from 'next/navigation';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+
 interface WeaknessPattern {
   category: string;
   type: string;
@@ -90,7 +92,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!token || !curriculumId) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/custom_lessons?curriculum_id=${curriculumId}&token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/custom_lessons?curriculum_id=${curriculumId}&token=${token}`, {
         method: 'GET',
       });
       
@@ -111,7 +113,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!token || !curriculumId) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/start_custom_lesson_conversation?token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/start_custom_lesson_conversation?token=${token}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,7 +146,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     }
     
     try {
-      const response = await fetch(`http://localhost:8000/api/custom_lessons/${lessonId}?token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/custom_lessons/${lessonId}?token=${token}`, {
         method: 'DELETE',
       });
       
@@ -164,7 +166,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     
     try {
       // First check for existing suggestions, with auto-generate enabled for first daily visit
-      const response = await fetch(`http://localhost:8000/api/lesson_suggestions/check?curriculum_id=${curriculumId}&auto_generate=true&token=${token}`);
+      const response = await fetch(`${API_BASE}/api/lesson_suggestions/check?curriculum_id=${curriculumId}&auto_generate=true&token=${token}`);
       if (response.ok) {
         const data = await response.json();
         if (data.has_suggestions) {
@@ -195,7 +197,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!token || !curriculumId) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/lesson_suggestions/check?curriculum_id=${curriculumId}&token=${token}`);
+      const response = await fetch(`${API_BASE}/api/lesson_suggestions/check?curriculum_id=${curriculumId}&token=${token}`);
       if (response.ok) {
         const data = await response.json();
         if (data.has_suggestions) {
@@ -213,7 +215,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     
     setLoadingSuggestions(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/lesson_suggestions/generate?token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/lesson_suggestions/generate?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ curriculum_id: curriculumId }),
@@ -246,7 +248,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!currentSuggestions || !token) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/lesson_suggestions/${currentSuggestions.id}/use?token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/lesson_suggestions/${currentSuggestions.id}/use?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lesson_index: lessonIndex }),
@@ -288,7 +290,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!currentSuggestions || !token) return;
     
     try {
-      await fetch(`http://localhost:8000/api/lesson_suggestions/${currentSuggestions.id}/dismiss?token=${token}`, {
+      await fetch(`${API_BASE}/api/lesson_suggestions/${currentSuggestions.id}/dismiss?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lesson_index: lessonIndex }),
@@ -321,7 +323,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!currentSuggestions || !token || !isUnseen) return;
     
     try {
-      await fetch(`http://localhost:8000/api/lesson_suggestions/${currentSuggestions.id}/mark_seen?token=${token}`, {
+      await fetch(`${API_BASE}/api/lesson_suggestions/${currentSuggestions.id}/mark_seen?token=${token}`, {
         method: 'POST',
       });
       setIsUnseen(false); // Change notification from red to grey
@@ -334,7 +336,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     if (!currentSuggestions || !token) return;
     
     try {
-      await fetch(`http://localhost:8000/api/lesson_suggestions/${currentSuggestions.id}/dismiss?token=${token}`, {
+      await fetch(`${API_BASE}/api/lesson_suggestions/${currentSuggestions.id}/dismiss?token=${token}`, {
         method: 'POST',
       });
       setShowSuggestions(false);
@@ -364,7 +366,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     
     setRefreshing(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/lesson_suggestions/refresh?token=${token}`, {
+      const response = await fetch(`${API_BASE}/api/lesson_suggestions/refresh?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ curriculum_id: curriculumId }),
