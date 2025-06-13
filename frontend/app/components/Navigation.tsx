@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { supabase } from '../../supabaseClient';
 import { 
   HomeIcon, 
   BookOpenIcon, 
   ChartBarIcon, 
   UserIcon,
-  ClockIcon 
+  ClockIcon,
+  ArrowRightOnRectangleIcon
 } from '@heroicons/react/24/outline';
 
 const Navigation = () => {
@@ -22,6 +24,15 @@ const Navigation = () => {
     // { name: 'Curriculum', href: '/curriculum', icon: BookOpenIcon },
     { name: 'Profile', href: '/profile', icon: UserIcon },
   ];
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+      // Navigation will be automatically updated via useUser hook
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+  };
 
   return (
     <>
@@ -49,6 +60,15 @@ const Navigation = () => {
             );
           })}
         </div>
+        <div className="px-2 pb-4">
+          <button
+            onClick={handleLogout}
+            className="flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors"
+          >
+            <ArrowRightOnRectangleIcon className="h-5 w-5 mr-3" />
+            Log Out
+          </button>
+        </div>
       </nav>
 
       {/* Mobile Navigation */}
@@ -69,6 +89,13 @@ const Navigation = () => {
               </Link>
             );
           })}
+          <button
+            onClick={handleLogout}
+            className="flex flex-col items-center py-2 px-3 text-gray-600 hover:text-red-600"
+          >
+            <ArrowRightOnRectangleIcon className="h-6 w-6" />
+            <span className="text-xs mt-1">Log Out</span>
+          </button>
         </div>
       </nav>
     </>
