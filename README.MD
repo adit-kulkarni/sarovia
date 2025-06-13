@@ -1,6 +1,6 @@
-# OpenAI Realtime API Demo - Python/React Language Learning Platform
+# Sarovia - Language Learning Platform
 
-This is a language learning platform that uses OpenAI's Realtime API for voice conversations, with automatic feedback generation and progress tracking.
+This is a language learning platform built on OpenAI's Realtime API for voice conversations, with automatic feedback generation and progress tracking.
 
 ## Features
 
