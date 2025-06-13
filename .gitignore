@@ -21,4 +21,3 @@ node_modules
 # Deployment configurations with secrets
 render.yaml
 railway.toml
-vercel.json
