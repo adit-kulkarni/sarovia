@@ -1,0 +1,17 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+aiohttp==3.9.3
+python-dotenv==1.0.0
+supabase==2.3.0
+pyjwt==2.8.0
+requests==2.31.0
+pydantic==2.5.0
+openai==1.3.0
+spacy==3.7.2
+numpy>=1.21.0
+httpx==0.25.0
+
+# SpaCy language models
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.7.0/es_core_news_sm-3.7.0-py3-none-any.whl 

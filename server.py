@@ -25,7 +25,12 @@ import warnings
 from supabase import create_client, Client
 import numpy as np
 from collections import defaultdict, Counter
-import spacy
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    SPACY_AVAILABLE = False
+    spacy = None
 
 # Import the optimized lesson summary
 from optimized_lesson_summary import get_lesson_summary_optimized
@@ -115,6 +120,10 @@ def get_nlp_model(language: str):
     """Get or load spaCy model for the specified language"""
     global nlp_models
     
+    if not SPACY_AVAILABLE:
+        logging.warning("spaCy not available, NLP features will be limited")
+        return None
+    
     if language in nlp_models:
         return nlp_models[language]
     
@@ -135,11 +144,11 @@ def get_nlp_model(language: str):
         logging.info(f"Loaded spaCy model {model_name} for language {language}")
         return nlp_models[language]
     except OSError:
-        logging.warning(f"spaCy model {model_name} not found, falling back to English model")
-        if 'en' not in nlp_models:
-            nlp_models['en'] = spacy.load('en_core_web_sm')
-        nlp_models[language] = nlp_models['en']
-        return nlp_models[language]
+        logging.warning(f"spaCy model {model_name} not found, NLP features will be limited")
+        return None
+    except Exception as e:
+        logging.warning(f"Error loading spaCy model: {e}")
+        return None
 
 # Language configuration
 LANGUAGES = {
@@ -260,11 +269,24 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "https://localhost:3000",
+        "https://frontend-efaqqvgby-adit-kulkarnis-projects.vercel.app",
+        "https://*.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+async def root():
+    return {"message": "Sarovia Language Learning API is running!", "status": "healthy"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "sarovia-api"}
 
 # Startup will be handled by the main execution at the bottom of the file
 
