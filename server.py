@@ -326,6 +326,53 @@ async def debug_openai():
     except Exception as e:
         return {"error": f"Failed to test OpenAI connection: {str(e)}"}
 
+@app.get("/debug/websocket")
+async def debug_websocket():
+    """Debug endpoint to test WebSocket connection to OpenAI"""
+    try:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return {"error": "OPENAI_API_KEY environment variable not set"}
+        
+        # Test WebSocket connection
+        import websockets
+        import asyncio
+        
+        ws_url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17'
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'OpenAI-Beta': 'realtime=v1'
+        }
+        
+        try:
+            ws = await websockets.connect(
+                ws_url,
+                extra_headers=headers,
+                timeout=10
+            )
+            await ws.close()
+            return {
+                "status": "success",
+                "message": "WebSocket connection to OpenAI Realtime API successful",
+                "url": ws_url
+            }
+        except websockets.exceptions.InvalidStatusCode as e:
+            return {
+                "error": "WebSocket connection failed",
+                "status_code": e.status_code,
+                "response_headers": dict(e.response_headers) if hasattr(e, 'response_headers') else None,
+                "details": str(e)
+            }
+        except Exception as e:
+            return {
+                "error": "WebSocket connection failed",
+                "exception_type": type(e).__name__,
+                "details": str(e)
+            }
+            
+    except Exception as e:
+        return {"error": f"Failed to test WebSocket connection: {str(e)}"}
+
 # Startup will be handled by the main execution at the bottom of the file
 
 
@@ -380,16 +427,36 @@ def verify_jwt(token):
 async def connect_to_openai():
     """Establish WebSocket connection with OpenAI"""
     try:
+        logging.info(f"[OpenAI] Attempting to connect to WebSocket URL: {WS_URL}")
+        logging.info(f"[OpenAI] Using API key prefix: {API_KEY[:7]}...")
+        
+        headers = {
+            'Authorization': f'Bearer {API_KEY}',
+            'OpenAI-Beta': 'realtime=v1'
+        }
+        logging.info(f"[OpenAI] Headers: {dict((k, v[:20] + '...' if k == 'Authorization' else v) for k, v in headers.items())}")
+        
         ws = await websockets.connect(
             WS_URL,
-            extra_headers={
-                'Authorization': f'Bearer {API_KEY}',
-                'OpenAI-Beta': 'realtime=v1'
-            }
+            extra_headers=headers,
+            timeout=30  # Add explicit timeout
         )
+        logging.info(f"[OpenAI] WebSocket connection established successfully")
         return ws
+    except websockets.exceptions.InvalidStatusCode as e:
+        logging.error(f"[OpenAI] Invalid status code: {e.status_code} - {e}")
+        logging.error(f"[OpenAI] Response headers: {e.response_headers}")
+        return None
+    except websockets.exceptions.ConnectionClosed as e:
+        logging.error(f"[OpenAI] Connection closed: {e.code} - {e.reason}")
+        return None
+    except asyncio.TimeoutError as e:
+        logging.error(f"[OpenAI] Connection timeout: {e}")
+        return None
     except Exception as e:
-        print(f"Failed to connect to OpenAI: {e}")
+        logging.error(f"[OpenAI] Unexpected error connecting to OpenAI: {type(e).__name__}: {e}")
+        import traceback
+        logging.error(f"[OpenAI] Full traceback: {traceback.format_exc()}")
         return None
 
 async def forward_to_openai(ws: websockets.WebSocketClientProtocol, message: dict):
