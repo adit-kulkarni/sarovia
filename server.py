@@ -347,7 +347,7 @@ async def debug_websocket():
         try:
             ws = await websockets.connect(
                 ws_url,
-                additional_headers=headers,
+                extra_headers=headers,
                 timeout=10
             )
             await ws.close()
@@ -438,7 +438,7 @@ async def connect_to_openai():
         
         ws = await websockets.connect(
             WS_URL,
-            additional_headers=headers,
+            extra_headers=headers,
             timeout=30  # Add explicit timeout
         )
         logging.info(f"[OpenAI] WebSocket connection established successfully")
