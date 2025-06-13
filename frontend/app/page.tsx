@@ -870,12 +870,27 @@ const Dashboard = () => {
       setFeedbackError(null);
       try {
         const { data: { user } } = await supabaseClient.auth.getUser();
-        if (!user) return;
-        // Fetch feedback data from message_feedback table
+        if (!user || !selectedCurriculum) {
+          setFilteredFeedbacks([]);
+          return;
+        }
+        
+        // Fetch feedback data filtered by the selected curriculum
         const { data, error } = await supabaseClient
           .from('message_feedback')
-          .select('*')
+          .select(`
+            *,
+            messages!inner(
+              conversation_id,
+              conversations!inner(
+                curriculum_id,
+                language
+              )
+            )
+          `)
+          .eq('messages.conversations.curriculum_id', selectedCurriculum.id)
           .order('created_at', { ascending: false });
+          
         if (error) throw error;
         setFilteredFeedbacks(data || []);
       } catch (error: any) {
@@ -885,8 +900,9 @@ const Dashboard = () => {
         setFeedbackLoading(false);
       }
     };
+    
     fetchFeedback();
-  }, []);
+  }, [selectedCurriculum?.id]); // Add selectedCurriculum as dependency
 
   if (authLoading) {
     return <div className="max-w-5xl mx-auto p-6">Loading authentication...</div>;
