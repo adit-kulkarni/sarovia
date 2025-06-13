@@ -17,3 +17,8 @@ __pycache__/
 Thumbs.db 
 node_modules
 .vercel
+
+# Deployment configurations with secrets
+render.yaml
+railway.toml
+vercel.json

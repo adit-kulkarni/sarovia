@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: sarovia-api
+    runtime: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        value: YOUR_SUPABASE_URL_HERE
+      - key: SUPABASE_SERVICE_KEY
+        value: YOUR_SUPABASE_SERVICE_KEY_HERE
+      - key: SUPABASE_JWT_SECRET
+        value: YOUR_SUPABASE_JWT_SECRET_HERE
+      - key: OPENAI_API_KEY
+        value: YOUR_OPENAI_API_KEY_HERE
+      - key: INTERACTION_MODE
+        value: audio 
