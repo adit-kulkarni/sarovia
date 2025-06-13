@@ -289,6 +289,43 @@ async def root():
 async def health_check():
     return {"status": "healthy", "service": "sarovia-api"}
 
+@app.get("/debug/openai")
+async def debug_openai():
+    """Debug endpoint to test OpenAI connection"""
+    try:
+        # Check if API key is set
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return {"error": "OPENAI_API_KEY environment variable not set"}
+        
+        # Check API key format
+        if not api_key.startswith("sk-"):
+            return {"error": "Invalid API key format (should start with 'sk-')"}
+        
+        # Test basic OpenAI API connection (not realtime)
+        import httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                return {
+                    "status": "success", 
+                    "message": "OpenAI API key is valid",
+                    "api_key_prefix": api_key[:7] + "..." if len(api_key) > 7 else "too_short"
+                }
+            else:
+                return {
+                    "error": f"OpenAI API returned status {response.status_code}",
+                    "response": response.text[:200]
+                }
+                
+    except Exception as e:
+        return {"error": f"Failed to test OpenAI connection: {str(e)}"}
+
 # Startup will be handled by the main execution at the bottom of the file
 
 
