@@ -274,6 +274,7 @@ app.add_middleware(
         "https://localhost:3000",
         "https://frontend-efaqqvgby-adit-kulkarnis-projects.vercel.app",
         "https://frontend-ruby-five-82.vercel.app",
+        "https://frontend-git-main-adit-kulkarnis-projects.vercel.app",
         "https://*.vercel.app"
     ],
     allow_credentials=True,
