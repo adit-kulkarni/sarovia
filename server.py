@@ -273,6 +273,7 @@ app.add_middleware(
         "http://localhost:3000", 
         "https://localhost:3000",
         "https://frontend-efaqqvgby-adit-kulkarnis-projects.vercel.app",
+        "https://frontend-ruby-five-82.vercel.app",
         "https://*.vercel.app"
     ],
     allow_credentials=True,
