@@ -111,7 +111,7 @@ if not API_KEY:
 # Interaction mode configuration - can be "audio" or "text"
 INTERACTION_MODE = os.getenv("INTERACTION_MODE", "audio")
 
-WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01'
+WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17'
 
 # Initialize spaCy models
 nlp_models = {}
@@ -326,33 +326,6 @@ async def debug_openai():
     except Exception as e:
         return {"error": f"Failed to test OpenAI connection: {str(e)}"}
 
-@app.get("/debug/openai-websocket")
-async def debug_openai_websocket():
-    """Debug endpoint to test OpenAI WebSocket connection"""
-    try:
-        # Check if API key is set
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return {"error": "OPENAI_API_KEY environment variable not set"}
-        
-        # Test WebSocket connection
-        ws = await connect_to_openai()
-        if ws:
-            await ws.close()
-            return {
-                "status": "success", 
-                "message": "OpenAI Realtime WebSocket connection successful",
-                "ws_url": WS_URL
-            }
-        else:
-            return {
-                "error": "Failed to connect to OpenAI Realtime WebSocket",
-                "ws_url": WS_URL
-            }
-                
-    except Exception as e:
-        return {"error": f"Failed to test OpenAI WebSocket: {str(e)}"}
-
 # Startup will be handled by the main execution at the bottom of the file
 
 
@@ -407,25 +380,16 @@ def verify_jwt(token):
 async def connect_to_openai():
     """Establish WebSocket connection with OpenAI"""
     try:
-        logging.info(f"Attempting to connect to OpenAI Realtime API: {WS_URL}")
         ws = await websockets.connect(
             WS_URL,
             extra_headers={
                 'Authorization': f'Bearer {API_KEY}',
                 'OpenAI-Beta': 'realtime=v1'
-            },
-            timeout=10
+            }
         )
-        logging.info("Successfully connected to OpenAI Realtime API")
         return ws
-    except websockets.exceptions.InvalidStatusCode as e:
-        logging.error(f"OpenAI WebSocket connection failed with status {e.status_code}: {e}")
-        return None
-    except websockets.exceptions.ConnectionClosedError as e:
-        logging.error(f"OpenAI WebSocket connection closed: {e}")
-        return None
     except Exception as e:
-        logging.error(f"Failed to connect to OpenAI Realtime API: {type(e).__name__}: {e}")
+        print(f"Failed to connect to OpenAI: {e}")
         return None
 
 async def forward_to_openai(ws: websockets.WebSocketClientProtocol, message: dict):
