@@ -610,6 +610,25 @@ const Dashboard = () => {
 
   const user = useUser();
 
+  // Function to get personalized greeting based on time of day
+  const getPersonalizedGreeting = () => {
+    const hour = new Date().getHours();
+    let timeOfDay = '';
+    
+    if (hour >= 5 && hour < 12) {
+      timeOfDay = 'Morning';
+    } else if (hour >= 12 && hour < 17) {
+      timeOfDay = 'Afternoon';
+    } else if (hour >= 17 && hour < 22) {
+      timeOfDay = 'Evening';
+    } else {
+      timeOfDay = 'Night';
+    }
+    
+    const firstName = user?.user_metadata?.full_name?.split(' ')[0] || user?.email?.split('@')[0] || 'there';
+    return `Good ${timeOfDay}, ${firstName}!`;
+  };
+
   // Auto-refresh knowledge data when returning to dashboard
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -878,92 +897,266 @@ const Dashboard = () => {
 
   return (
     <div className="relative max-w-6xl mx-auto p-6 min-h-screen">
-      {/* Jump into a Conversation Button */}
-      <div className="flex flex-col items-center mb-8 relative" style={{zIndex: 1}}>
-        <div
-          className="bg-white rounded-3xl shadow-lg border border-orange-200 p-8 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200 focus-within:ring-4 focus-within:ring-orange-200 group"
-          style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.12)' }}
-          onClick={handleStartConversation}
-        >
-          <div className="flex flex-col items-center">
-            {/* Microphone Icon */}
-            <div className="relative mb-4">
-              {/* Microphone body */}
-              <div className="bg-gradient-to-b from-orange-400 to-orange-600 rounded-full w-16 h-24 relative group-hover:scale-110 transition-transform duration-200 shadow-lg">
-                {/* Microphone grille lines */}
-                <div className="absolute inset-x-0 top-4 space-y-1 px-4">
-                  <div className="h-0.5 bg-white/30 rounded"></div>
-                  <div className="h-0.5 bg-white/30 rounded"></div>
-                  <div className="h-0.5 bg-white/30 rounded"></div>
-                  <div className="h-0.5 bg-white/30 rounded"></div>
+      {/* Personalized Greeting */}
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">
+          {getPersonalizedGreeting()}
+        </h1>
+        <p className="text-gray-600">
+          Ready to continue your language learning journey?
+        </p>
+      </div>
+
+      {/* Practice Now + Language Paths (side by side on desktop) */}
+      <div className="w-full flex flex-col lg:flex-row items-start justify-center mb-12 gap-6">
+        {/* Scrollable container for both columns */}
+        <div className={`hidden lg:flex w-full max-w-4xl ${
+          Math.max(curriculums.filter((_, i) => i % 2 === 0).length, curriculums.filter((_, i) => i % 2 === 1).length) >= 3 
+            ? 'max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-orange-300 scrollbar-track-orange-100' 
+            : ''
+        }`}>
+          <div className="flex w-full gap-6">
+            {/* Language Paths - Left */}
+            <div className="flex flex-col items-end flex-1 min-w-0 max-w-sm">
+              <div className="flex flex-col w-full">
+                <div className="flex flex-col gap-4 pr-2">
+                  {curriculums.filter((_, i) => i % 2 === 0).map(c => (
+                    <div
+                      key={c.id}
+                      className={`relative w-full max-w-[260px] rounded-xl bg-white/60 backdrop-blur-md shadow-xl p-4 cursor-pointer border-2 transition-all duration-200 ${selectedCurriculum && c.id === selectedCurriculum.id ? 'border-orange-500 scale-102 ring-4 ring-orange-100' : 'border-transparent hover:border-orange-300 hover:scale-101'} group ml-auto`}
+                      onClick={() => handleCurriculumChange(c.id)}
+                      style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-xl font-bold text-gray-800">
+                          {languages.find(l => l.code === c.language)?.name || c.language}
+                        </div>
+                        <div className="flex items-center gap-1 overflow-hidden">
+                          <div className="flex -space-x-1">
+                            {(languages.find(l => l.code === c.language)?.countryFlags || ['🏳️']).slice(0, 3).map((flag, idx) => (
+                              <span key={idx} className="text-lg block w-6 h-6 flex items-center justify-center bg-white rounded-full border border-gray-200 shadow-sm">
+                                {flag}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-end justify-between">
+                        <div className="space-y-1">
+                          <div className="text-xs text-gray-600">Start Level: <span className="font-semibold text-gray-800">{c.start_level}</span></div>
+                          <div className="text-xs text-gray-600">Start Date: <span className="font-semibold text-gray-800">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
+                          <div className="text-xs text-gray-600">Current Level: <span className="font-semibold text-gray-800">{getCurrentLevel(c)}</span></div>
+                        </div>
+                        {/* Delete button - aligned with Current Level */}
+                        <button
+                          className="bg-white shadow-lg rounded-full p-1 z-20 border-2 border-red-200 hover:bg-red-500 hover:text-white transition-colors duration-200 group-hover:scale-105 focus:outline-none"
+                          title="Remove this learning path"
+                          onClick={e => { e.stopPropagation(); setShowDeleteId(c.id); setDeleteConfirmChecked(false); }}
+                          style={{ boxShadow: '0 4px 16px 0 rgba(255,0,0,0.10)' }}
+                        >
+                          <TrashIcon className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                {/* Microphone highlight */}
-                <div className="absolute top-2 left-2 w-3 h-6 bg-white/20 rounded-full"></div>
               </div>
-              
-              {/* Microphone stand */}
-              <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-1 h-6 bg-gray-400 group-hover:scale-110 transition-transform duration-200"></div>
-              
-              {/* Microphone base */}
-              <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-8 h-2 bg-gray-500 rounded-full group-hover:scale-110 transition-transform duration-200"></div>
             </div>
             
-            <h3 className="retro-header text-2xl font-bold text-orange-600">
-              Practice Now
-            </h3>
+            {/* Microphone Button Centered */}
+            <div className="flex flex-col items-center flex-shrink-0 z-10 mt-8">
+              <div
+                className="bg-white rounded-2xl shadow-lg border border-orange-200 p-8 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200 focus-within:ring-4 focus-within:ring-orange-200 group"
+                style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.12)' }}
+                onClick={handleStartConversation}
+              >
+                <div className="flex flex-col items-center">
+                  {/* Microphone Icon */}
+                  <div className="relative mb-4">
+                    {/* Microphone body */}
+                    <div className="bg-gradient-to-b from-orange-400 to-orange-600 rounded-full w-12 h-16 relative group-hover:scale-110 transition-transform duration-200 shadow-lg">
+                      {/* Microphone grille lines */}
+                      <div className="absolute inset-x-0 top-3 space-y-1 px-3">
+                        <div className="h-0.5 bg-white/30 rounded"></div>
+                        <div className="h-0.5 bg-white/30 rounded"></div>
+                        <div className="h-0.5 bg-white/30 rounded"></div>
+                      </div>
+                      {/* Microphone highlight */}
+                      <div className="absolute top-2 left-2 w-2.5 h-4 bg-white/20 rounded-full"></div>
+                    </div>
+                    {/* Microphone stand */}
+                    <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-0.5 h-4 bg-gray-400 group-hover:scale-110 transition-transform duration-200"></div>
+                    {/* Microphone base */}
+                    <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-6 h-1.5 bg-gray-500 rounded-full group-hover:scale-110 transition-transform duration-200"></div>
+                  </div>
+                  <div className="text-center">
+                    <h3 className="text-lg font-bold text-gray-800 mb-1">
+                      Start Conversation
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Practice speaking with AI
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {/* Add Language Path Button - moved under mic */}
+              <div className="flex items-center mt-6 gap-2">
+                <button
+                  className="bg-orange-500 hover:bg-orange-600 text-white rounded-full shadow-lg p-2 transition-transform duration-200 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  title="Add Language Path"
+                  onClick={() => setShowAdd(v => !v)}
+                  style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
+                >
+                  <PlusIcon className="h-4 w-4" />
+                </button>
+                <span className="text-sm text-gray-700 font-medium select-none">Add Language Path</span>
+              </div>
+            </div>
+            
+            {/* Language Paths - Right */}
+            <div className="flex flex-col items-start flex-1 min-w-0 max-w-sm">
+              <div className="flex flex-col w-full">
+                <div className="flex flex-col gap-4 pl-2">
+                  {curriculums.filter((_, i) => i % 2 === 1).map(c => (
+                    <div
+                      key={c.id}
+                      className={`relative w-full max-w-[260px] rounded-xl bg-white/60 backdrop-blur-md shadow-xl p-4 cursor-pointer border-2 transition-all duration-200 ${selectedCurriculum && c.id === selectedCurriculum.id ? 'border-orange-500 scale-102 ring-4 ring-orange-100' : 'border-transparent hover:border-orange-300 hover:scale-101'} group`}
+                      onClick={() => handleCurriculumChange(c.id)}
+                      style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-xl font-bold text-gray-800">
+                          {languages.find(l => l.code === c.language)?.name || c.language}
+                        </div>
+                        <div className="flex items-center gap-1 overflow-hidden">
+                          <div className="flex -space-x-1">
+                            {(languages.find(l => l.code === c.language)?.countryFlags || ['🏳️']).slice(0, 3).map((flag, idx) => (
+                              <span key={idx} className="text-lg block w-6 h-6 flex items-center justify-center bg-white rounded-full border border-gray-200 shadow-sm">
+                                {flag}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-end justify-between">
+                        <div className="space-y-1">
+                          <div className="text-xs text-gray-600">Start Level: <span className="font-semibold text-gray-800">{c.start_level}</span></div>
+                          <div className="text-xs text-gray-600">Start Date: <span className="font-semibold text-gray-800">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
+                          <div className="text-xs text-gray-600">Current Level: <span className="font-semibold text-gray-800">{getCurrentLevel(c)}</span></div>
+                        </div>
+                        {/* Delete button - aligned with Current Level */}
+                        <button
+                          className="bg-white shadow-lg rounded-full p-1 z-20 border-2 border-red-200 hover:bg-red-500 hover:text-white transition-colors duration-200 group-hover:scale-105 focus:outline-none"
+                          title="Remove this learning path"
+                          onClick={e => { e.stopPropagation(); setShowDeleteId(c.id); setDeleteConfirmChecked(false); }}
+                          style={{ boxShadow: '0 4px 16px 0 rgba(255,0,0,0.10)' }}
+                        >
+                          <TrashIcon className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Mobile/Tablet: Language Paths below mic */}
+        <div className="flex flex-col w-full lg:hidden mt-8">
+          <div className="flex flex-col items-center flex-shrink-0 z-10 mb-8">
+            <div
+              className="bg-white rounded-2xl shadow-lg border border-orange-200 p-8 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200 focus-within:ring-4 focus-within:ring-orange-200 group"
+              style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.12)' }}
+              onClick={handleStartConversation}
+            >
+              <div className="flex flex-col items-center">
+                {/* Microphone Icon */}
+                <div className="relative mb-4">
+                  {/* Microphone body */}
+                  <div className="bg-gradient-to-b from-orange-400 to-orange-600 rounded-full w-12 h-16 relative group-hover:scale-110 transition-transform duration-200 shadow-lg">
+                    {/* Microphone grille lines */}
+                    <div className="absolute inset-x-0 top-3 space-y-1 px-3">
+                      <div className="h-0.5 bg-white/30 rounded"></div>
+                      <div className="h-0.5 bg-white/30 rounded"></div>
+                      <div className="h-0.5 bg-white/30 rounded"></div>
+                    </div>
+                    {/* Microphone highlight */}
+                    <div className="absolute top-2 left-2 w-2.5 h-4 bg-white/20 rounded-full"></div>
+                  </div>
+                  {/* Microphone stand */}
+                  <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-0.5 h-4 bg-gray-400 group-hover:scale-110 transition-transform duration-200"></div>
+                  {/* Microphone base */}
+                  <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-6 h-1.5 bg-gray-500 rounded-full group-hover:scale-110 transition-transform duration-200"></div>
+                </div>
+                <div className="text-center">
+                  <h3 className="text-lg font-bold text-gray-800 mb-1">
+                    Start Conversation
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    Practice speaking with AI
+                  </p>
+                </div>
+              </div>
+            </div>
+            {/* Add Language Path Button - moved under mic */}
+            <div className="flex items-center mt-6 gap-2">
+              <button
+                className="bg-orange-500 hover:bg-orange-600 text-white rounded-full shadow-lg p-2 transition-transform duration-200 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-orange-300"
+                title="Add Language Path"
+                onClick={() => setShowAdd(v => !v)}
+                style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
+              >
+                <PlusIcon className="h-4 w-4" />
+              </button>
+              <span className="text-sm text-gray-700 font-medium select-none">Add Language Path</span>
+            </div>
+          </div>
+          <div className="px-6 py-2">
+            <div className="flex space-x-4 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
+              {curriculums.map(c => (
+                <div
+                  key={c.id}
+                  className={`relative min-w-[220px] max-w-[260px] rounded-xl bg-white/60 backdrop-blur-md shadow-xl p-4 cursor-pointer border-2 transition-all duration-200 ${selectedCurriculum && c.id === selectedCurriculum.id ? 'border-orange-500 scale-102 ring-4 ring-orange-100' : 'border-transparent hover:border-orange-300 hover:scale-101'} group`}
+                  onClick={() => handleCurriculumChange(c.id)}
+                  style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xl font-bold text-gray-800">
+                      {languages.find(l => l.code === c.language)?.name || c.language}
+                    </div>
+                    <div className="flex items-center gap-1 overflow-hidden">
+                      <div className="flex -space-x-1">
+                        {(languages.find(l => l.code === c.language)?.countryFlags || ['🏳️']).slice(0, 3).map((flag, idx) => (
+                          <span key={idx} className="text-lg block w-6 h-6 flex items-center justify-center bg-white rounded-full border border-gray-200 shadow-sm">
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-end justify-between">
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-600">Start Level: <span className="font-semibold text-gray-800">{c.start_level}</span></div>
+                      <div className="text-xs text-gray-600">Start Date: <span className="font-semibold text-gray-800">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
+                      <div className="text-xs text-gray-600">Current Level: <span className="font-semibold text-gray-800">{getCurrentLevel(c)}</span></div>
+                    </div>
+                    {/* Delete button - aligned with Current Level */}
+                    <button
+                      className="bg-white shadow-lg rounded-full p-1 z-20 border-2 border-red-200 hover:bg-red-500 hover:text-white transition-colors duration-200 group-hover:scale-105 focus:outline-none"
+                      title="Remove this learning path"
+                      onClick={e => { e.stopPropagation(); setShowDeleteId(c.id); setDeleteConfirmChecked(false); }}
+                      style={{ boxShadow: '0 4px 16px 0 rgba(255,0,0,0.10)' }}
+                    >
+                      <TrashIcon className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Section Divider */}
-      <div className="section-divider"></div>
-
-      {/* Floating Add Button */}
-      <div className="mb-12">
-        <h2 className="retro-header text-3xl font-extrabold text-center mb-4">
-          Language Paths
-        </h2>
-        <div className="flex items-center mb-2 px-10 gap-2">
-        <button
-            className="bg-orange-500 hover:bg-orange-600 text-white rounded-full shadow-lg p-1.5 transition-transform duration-200 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-orange-300"
-            title="Add Language Path"
-            onClick={() => setShowAdd(v => !v)}
-            style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
-          >
-            <PlusIcon className="h-4 w-4" />
-        </button>
-          <span className="ml-2 text-sm text-gray-700 font-medium select-none">Add Language Path</span>
-        </div>
-        <div className="px-10 py-2">
-          <div className="flex space-x-4 overflow-x-auto pb-2 mb-4" style={{ WebkitOverflowScrolling: 'touch' }}>
-            {curriculums.map(c => (
-              <div
-                key={c.id}
-                className={`relative min-w-[240px] max-w-[280px] rounded-2xl bg-white/60 backdrop-blur-md shadow-xl p-4 cursor-pointer border-2 transition-all duration-200 ${selectedCurriculum && c.id === selectedCurriculum.id ? 'border-orange-500 scale-102 ring-4 ring-orange-100' : 'border-transparent hover:border-orange-300 hover:scale-101'} group`}
-                onClick={() => handleCurriculumChange(c.id)}
-                style={{ boxShadow: '0 8px 32px 0 rgba(255,140,0,0.10)' }}
-              >
-                {/* Delete button */}
-                <button
-                  className="absolute top-2 right-2 bg-white shadow-lg rounded-full p-1.5 z-20 border-2 border-red-200 hover:bg-red-500 hover:text-white transition-colors duration-200 group-hover:scale-105 focus:outline-none"
-                  title="Remove this learning path"
-                  onClick={e => { e.stopPropagation(); setShowDeleteId(c.id); setDeleteConfirmChecked(false); }}
-                  style={{ boxShadow: '0 4px 16px 0 rgba(255,0,0,0.10)' }}
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-                <div className="text-2xl font-bold mb-2 flex items-center gap-2">
-                  <MultiCountryFlags language={languages.find(l => l.code === c.language) || { code: c.language, name: c.language, flag: '🏳️', countryFlags: ['🏳️'] }} />
-                </div>
-                <div className="text-sm text-gray-700 mb-1">Start Level: <span className="font-semibold">{c.start_level}</span></div>
-                <div className="text-sm text-gray-700 mb-1">Start Date: <span className="font-semibold">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Unknown'}</span></div>
-                <div className="text-sm text-gray-700">Current Level: <span className="font-semibold">{getCurrentLevel(c)}</span></div>
-              </div>
-            ))}
-          </div>
-        </div>
-            </div>
-
       {/* Section Divider */}
       <div className="section-divider"></div>
 
@@ -1169,8 +1362,6 @@ const Dashboard = () => {
         />
       )}
 
-
-
       {/* Add Curriculum Modal */}
       <Transition.Root show={showAdd} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setShowAdd(false)}>
@@ -1289,21 +1480,21 @@ const Dashboard = () => {
                 enter="ease-out duration-300" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100"
                 leave="ease-in duration-200" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-8 text-left align-middle shadow-xl transition-all">
-                  <Dialog.Title as="h3" className="text-2xl font-bold mb-4 text-orange-600 text-center">
+                <Dialog.Panel className="w-full max-w-4xl transform overflow-hidden rounded-2xl bg-white p-6 sm:p-8 text-left align-middle shadow-xl transition-all mx-4">
+                  <Dialog.Title as="h3" className="text-2xl font-bold mb-6 text-orange-600 text-center">
                     Choose a Conversation Context
                   </Dialog.Title>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[70vh] overflow-y-auto">
                     {contextCards.map(context => (
                       <button
                         key={context.id}
-                        className="flex flex-col items-center justify-center rounded-xl border-2 p-5 bg-orange-50 hover:bg-orange-100 border-orange-200 hover:border-orange-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-300"
+                        className="flex flex-col items-center justify-center rounded-xl border-2 p-4 sm:p-5 bg-orange-50 hover:bg-orange-100 border-orange-200 hover:border-orange-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-300 min-h-[140px]"
                         onClick={() => handleContextSelect(context.id)}
                         disabled={contextLoading}
                       >
                         <span className="text-3xl mb-2">{context.icon}</span>
-                        <span className="font-bold text-lg mb-1 text-orange-700">{context.title}</span>
-                        <span className="text-sm text-gray-600 text-center">{context.description}</span>
+                        <span className="font-bold text-base sm:text-lg mb-1 text-orange-700 text-center">{context.title}</span>
+                        <span className="text-xs sm:text-sm text-gray-600 text-center leading-tight">{context.description}</span>
                       </button>
                     ))}
                   </div>
@@ -1413,8 +1604,6 @@ const Dashboard = () => {
         loading={loadingSummary}
         token={token}
       />
-
-
 
       {error && (
         <div className="mt-6 text-red-500 text-center">{error}</div>
