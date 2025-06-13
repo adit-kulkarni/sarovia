@@ -4820,6 +4820,243 @@ async def get_progress_metrics(
         logging.error(f"Error in progress metrics endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch progress metrics: {str(e)}")
 
+class CompleteConversationRequest(BaseModel):
+    conversation_id: str
+
+@app.post("/api/conversations/complete")
+async def complete_conversation(
+    request: CompleteConversationRequest,
+    token: str = Query(...)
+):
+    """Complete a regular conversation and generate report card"""
+    try:
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        
+        conversation_id = request.conversation_id
+        
+        # Verify user owns the conversation
+        conv_result = supabase.table('conversations').select('*').eq('id', conversation_id).eq('user_id', user_id).execute()
+        if not conv_result.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        conversation = conv_result.data[0]
+        language = conversation['language']
+        curriculum_id = conversation.get('curriculum_id')
+        
+        # Update conversation as completed (add a completed_at timestamp)
+        supabase.table('conversations').update({
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }).eq('id', conversation_id).execute()
+        
+        if language and curriculum_id:
+            # Update user knowledge incrementally
+            logging.info(f"Updating user knowledge for conversation completion: {conversation_id}")
+            await update_user_knowledge_incrementally(user_id, language, [conversation_id])
+            
+            # Create verb knowledge snapshot for the conversation
+            logging.info(f"Creating verb knowledge snapshot for conversation completion: {conversation_id}")
+            await create_verb_knowledge_snapshot(
+                user_id, language, curriculum_id, None, conversation_id, "conversation_completion"
+            )
+        
+        return {"message": "Conversation completed successfully", "conversation_id": conversation_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error completing conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conversations/{conversation_id}/summary")
+async def get_conversation_summary(conversation_id: str, token: str = Query(...)):
+    """Generate a conversation summary/report card"""
+    try:
+        # Handle JWT verification separately to return proper 401 errors
+        try:
+            user_payload = verify_jwt(token)
+            user_id = user_payload["sub"]
+        except jwt.InvalidTokenError as e:
+            logging.warning(f"[Conversation Summary] Invalid JWT token: {e}")
+            raise HTTPException(status_code=401, detail="Invalid authentication token")
+        except Exception as e:
+            logging.warning(f"[Conversation Summary] JWT verification failed: {e}")
+            raise HTTPException(status_code=401, detail="Authentication failed")
+        
+        logging.info(f"[Conversation Summary] Fetching summary for conversation_id: {conversation_id}, user_id: {user_id}")
+        
+        # Verify user owns the conversation
+        conv_result = supabase.table('conversations').select('*').eq('id', conversation_id).eq('user_id', user_id).execute()
+        if not conv_result.data:
+            logging.error(f"[Conversation Summary] Conversation not found for id: {conversation_id}")
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        conversation = conv_result.data[0]
+        language = conversation['language']
+        context = conversation['context']
+        level = conversation['level']
+        curriculum_id = conversation.get('curriculum_id')
+        
+        # Get conversation messages to count turns
+        messages_result = supabase.table('messages').select('id, role, content, created_at').eq('conversation_id', conversation_id).order('created_at').execute()
+        messages = messages_result.data if messages_result.data else []
+        
+        # Count turns (user messages only)
+        user_messages = [m for m in messages if m['role'] == 'user']
+        total_turns = len(user_messages)
+        
+        # Calculate conversation duration
+        if messages:
+            start_time = parse_datetime_safe_achievements(messages[0]['created_at'])
+            end_time = parse_datetime_safe_achievements(messages[-1]['created_at'])
+            duration = end_time - start_time
+            duration_str = f"{duration.seconds // 60}m {duration.seconds % 60}s"
+        else:
+            duration_str = "0m 0s"
+        
+        # Get conversation achievements and verb progress
+        achievements = []
+        total_words = estimate_words_used(total_turns)
+        
+        if curriculum_id:
+            # Get verb knowledge snapshots for before/after comparison
+            try:
+                # Find snapshot before this conversation
+                before_snapshot = None
+                after_snapshot = None
+                
+                snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', language).eq('conversation_id', conversation_id).execute()
+                if snapshot_result.data:
+                    after_snapshot = snapshot_result.data[0].get('verb_knowledge', {})
+                
+                # Try to find a previous snapshot for comparison
+                prev_snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', language).neq('conversation_id', conversation_id).order('created_at', desc=True).limit(1).execute()
+                if prev_snapshot_result.data:
+                    before_snapshot = prev_snapshot_result.data[0].get('verb_knowledge', {})
+                
+                # Generate verb-based achievements
+                if before_snapshot and after_snapshot:
+                    from optimized_lesson_summary import calculate_verb_achievements
+                    verb_achievements = calculate_verb_achievements(before_snapshot, after_snapshot, f"Conversation: {context}")
+                    achievements.extend(verb_achievements)
+                
+            except Exception as e:
+                logging.warning(f"Could not generate verb achievements for conversation {conversation_id}: {e}")
+        
+        # Get conversation feedback/mistakes
+        mistakes_by_category = []
+        total_mistakes = 0
+        new_vocabulary = []
+        improvement_areas = []
+        
+        try:
+            # Get feedback for all messages in this conversation - use the same pattern as lesson summary
+            if messages:
+                feedback_result = supabase.table('message_feedback').select('mistakes').in_('message_id', [m['id'] for m in messages]).execute()
+                feedbacks = feedback_result.data if feedback_result.data else []
+                
+                # Process mistakes - matches the working lesson pattern
+                category_counts = {}
+                all_mistakes = []
+                
+                for feedback in feedbacks:
+                    mistakes = feedback.get('mistakes', [])
+                    if mistakes:
+                        all_mistakes.extend(mistakes)
+                
+                for mistake in all_mistakes:
+                    category = mistake.get('category', 'Other')
+                    if category not in category_counts:
+                        category_counts[category] = {
+                            'category': category,
+                            'count': 0,
+                            'severity': 'minor',
+                            'examples': []
+                        }
+                    
+                    category_counts[category]['count'] += 1
+                    if len(category_counts[category]['examples']) < 2:
+                        category_counts[category]['examples'].append({
+                            'error': mistake.get('error', ''),
+                            'correction': mistake.get('correction', ''),
+                            'explanation': mistake.get('explanation', '')
+                        })
+                
+                total_mistakes = len(all_mistakes)
+                mistakes_by_category = list(category_counts.values())
+                
+                # Generate improvement areas based on most common mistakes
+                if mistakes_by_category:
+                    sorted_mistakes = sorted(mistakes_by_category, key=lambda x: x['count'], reverse=True)
+                    improvement_areas = [mistake['category'] for mistake in sorted_mistakes[:3]]
+            
+        except Exception as e:
+            logging.warning(f"Could not analyze conversation feedback: {e}")
+            import traceback
+            logging.warning(f"Feedback analysis traceback: {traceback.format_exc()}")
+        
+        # Generate general achievements based on conversation metrics
+        if total_turns >= 5:
+            achievements.append({
+                "id": "conversation_engagement",
+                "title": f"Great Conversation!",
+                "description": f"You engaged in {total_turns} turns of conversation practice.",
+                "icon": "💬",
+                "type": "engagement",
+                "value": total_turns
+            })
+        
+        if total_words >= 50:
+            achievements.append({
+                "id": "word_count",
+                "title": f"Vocabulary Practice",
+                "description": f"You used approximately {total_words} words in this conversation.",
+                "icon": "📝",
+                "type": "vocabulary",
+                "value": total_words
+            })
+        
+        # Create summary data structure - match lesson summary format exactly
+        summary_data = {
+            "lessonTitle": f"{context} ({level})",  # Use lessonTitle for consistency with modal
+            "totalTurns": total_turns,
+            "totalMistakes": total_mistakes,
+            "achievements": achievements,
+            "mistakesByCategory": mistakes_by_category,
+            "conversationDuration": duration_str,
+            "wordsUsed": total_words,
+            "newVocabulary": new_vocabulary,
+            "improvementAreas": improvement_areas,
+            "conversationId": conversation_id
+        }
+        
+        logging.info(f"[Conversation Summary] Generated summary with {len(achievements)} achievements and {total_mistakes} mistakes")
+        
+        return summary_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error generating conversation summary: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def parse_datetime_safe_achievements(datetime_str):
+    """Safely parse datetime string for achievements calculation"""
+    try:
+        if datetime_str.endswith('Z'):
+            datetime_str = datetime_str.replace('Z', '+00:00')
+        return datetime.fromisoformat(datetime_str)
+    except Exception as e:
+        logging.error(f"Error parsing datetime '{datetime_str}': {e}")
+        return datetime.now(timezone.utc)
+
+def estimate_words_used(turns_completed: int) -> int:
+    """Estimate words used based on conversation turns"""
+    # Rough estimate: average 8-12 words per user message
+    return turns_completed * 10
+
 
 
 

@@ -65,10 +65,18 @@ function ChatComponent() {
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
   const [isLessonConversation, setIsLessonConversation] = useState(false);
   
+  // Conversation completion states (for non-lesson conversations)
+  const [isCompletingConversation, setIsCompletingConversation] = useState(false);
+  const [conversationSummaryData, setConversationSummaryData] = useState<any>(null);
+  const [showConversationSummary, setShowConversationSummary] = useState(false);
+  
   // Lesson Summary Modal States
   const [showLessonSummary, setShowLessonSummary] = useState(false);
   const [lessonSummaryData, setLessonSummaryData] = useState<any>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  
+  // Token state for API calls
+  const [token, setToken] = useState<string | null>(null);
   
   // VAD Settings States
   const [vadSettings, setVadSettings] = useState<VADSettings>({ type: 'semantic', eagerness: 'low' });
@@ -115,6 +123,9 @@ function ChatComponent() {
           router.push('/login');
           return;
         }
+        
+        // Set token for API calls
+        setToken(session.access_token);
 
         const context = searchParams.get('context') || 'restaurant';
         const language = searchParams.get('language') || 'en';
@@ -483,12 +494,15 @@ function ChatComponent() {
           console.warn(`[Chat][${now}] Received event:`, data);
           if (data.type === 'conversation.created') {
             if (data.conversation && data.conversation.conversation_id) {
+              // Always set conversation ID when we receive it
+              setConversationId(data.conversation.conversation_id);
+              console.log(`[Chat][${now}] Conversation ID set:`, data.conversation.conversation_id);
+              
               if (!sessionReady) {
-                setConversationId(data.conversation.conversation_id);
                 setSessionReady(true);
                 console.log(`[Chat][${now}] Conversation ready, conversation_id:`, data.conversation.conversation_id);
               } else {
-                console.warn(`[Chat][${now}] Duplicate conversation.created event received after sessionReady was already set. Data:`, JSON.stringify(data));
+                console.log(`[Chat][${now}] Updated conversation ID after session was ready. Data:`, JSON.stringify(data));
               }
             } else {
               console.error(`[Chat][${now}] Malformed conversation.created event (missing conversation_id):`, JSON.stringify(data));
@@ -893,6 +907,90 @@ function ChatComponent() {
     }
   };
 
+  const handleCompleteConversation = async () => {
+    if (!conversation_id) {
+      return;
+    }
+
+    setIsCompletingConversation(true);
+    setLoadingSummary(true);
+    
+    try {
+      // Stop recording if currently recording
+      if (isRecording) {
+        console.log('[Complete Conversation] Stopping recording...');
+        stopRecording();
+      }
+      
+      // Stop any audio playback
+      stopAudioPlayback();
+      
+      // Close WebSocket connection to OpenAI
+      if (wsRef.current) {
+        console.log('[Complete Conversation] Closing WebSocket connection...');
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      // First, complete the conversation
+      const response = await fetch(`${API_BASE}/api/conversations/complete?token=${session.access_token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          conversation_id: conversation_id
+        })
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        throw new Error(responseData.detail || 'Failed to complete conversation');
+      }
+
+      console.log('[Complete Conversation] Conversation completed successfully:', responseData);
+      
+      // Now fetch the conversation summary
+      const encodedConversationId = encodeURIComponent(conversation_id);
+      const encodedToken = encodeURIComponent(session.access_token);
+      const summaryUrl = `${API_BASE}/api/conversations/${encodedConversationId}/summary?token=${encodedToken}`;
+      console.log('[Complete Conversation] Summary URL:', summaryUrl);
+      
+      const summaryResponse = await fetch(summaryUrl);
+      
+      if (summaryResponse.ok) {
+        const summaryData = await summaryResponse.json();
+        console.log('[Complete Conversation] Fetched summary:', summaryData);
+        setConversationSummaryData(summaryData);
+        setShowConversationSummary(true);
+      } else {
+        console.error('[Complete Conversation] Failed to fetch summary');
+        // Fallback: redirect immediately if summary fails
+        router.push('/history');
+      }
+      
+    } catch (error) {
+      console.error('[Complete Conversation] Error completing conversation:', error);
+      setError(error instanceof Error ? error.message : 'Failed to complete conversation');
+    } finally {
+      setIsCompletingConversation(false);
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleReturnToHistory = () => {
+    router.push('/history');
+  };
+
   // UI rendering logic
   if (!conversationStarted) {
     return (
@@ -1174,6 +1272,27 @@ function ChatComponent() {
               )}
             </button>
           )}
+
+          {/* End Conversation Button - Only show for non-lesson conversations */}
+          {!isLessonConversation && conversation_id && (
+            <button
+              onClick={handleCompleteConversation}
+              disabled={isCompletingConversation}
+              className="px-8 py-3 rounded-full bg-red-500 hover:bg-red-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
+            >
+              {isCompletingConversation ? (
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
+                  Ending...
+                </div>
+              ) : (
+                <div className="flex items-center">
+                  <span className="mr-2">🏁</span>
+                  End Conversation
+                </div>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1193,6 +1312,17 @@ function ChatComponent() {
         onReturnToDashboard={handleReturnToDashboard}
         summaryData={lessonSummaryData}
         loading={loadingSummary}
+        token={token}
+      />
+
+      {/* Conversation Summary Modal */}
+      <LessonSummaryModal
+        isOpen={showConversationSummary}
+        onClose={() => setShowConversationSummary(false)}
+        onReturnToDashboard={handleReturnToDashboard}
+        summaryData={conversationSummaryData}
+        loading={loadingSummary}
+        token={token}
       />
     </div>
   );
