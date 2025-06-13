@@ -39,7 +39,7 @@ const Navigation = () => {
       {/* Desktop Navigation */}
       <nav className="hidden md:flex fixed left-0 top-0 h-full w-64 bg-white border-r border-orange-100 flex-col">
         <div className="p-4">
-          <h1 className="text-xl font-bold text-orange-600">Language Learning</h1>
+          <h1 className="text-xl font-bold text-orange-600">Sarovia</h1>
         </div>
         <div className="flex-1 px-2 py-4">
           {navigationItems.map((item) => {

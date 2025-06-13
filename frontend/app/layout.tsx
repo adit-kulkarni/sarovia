@@ -6,8 +6,8 @@ import ClientLayout from './components/ClientLayout'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Language Learning App',
-  description: 'Learn languages through natural conversation',
+  title: 'Sarovia - Language Excellence Platform',
+  description: 'Unleash Your Academic Success with Sarovia\'s Language Excellence Platform',
 }
 
 export default function RootLayout({
