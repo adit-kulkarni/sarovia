@@ -19,6 +19,9 @@ import aiohttp
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 import httpx
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.asyncio import AsyncioIntegration
 import re
 from openai import AsyncOpenAI
 import warnings
@@ -95,6 +98,25 @@ class BackgroundTaskManager:
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Sentry for error monitoring
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[
+            FastApiIntegration(auto_enable=True),
+            AsyncioIntegration(),
+        ],
+        traces_sample_rate=0.1,  # 10% of transactions for performance monitoring
+        profiles_sample_rate=0.1,  # 10% for profiling
+        environment=os.getenv("ENVIRONMENT", "production"),
+        before_send=lambda event, hint: event if event.get('level') != 'info' else None  # Filter out info logs
+    )
+    logging.info("Sentry initialized for error monitoring")
+else:
+    logging.warning("SENTRY_DSN not found - error monitoring disabled")
+
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_SERVICE_KEY")
 jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
@@ -374,6 +396,56 @@ async def debug_websocket():
     except Exception as e:
         return {"error": f"Failed to test WebSocket connection: {str(e)}"}
 
+@app.get("/debug/sentry-test")
+async def test_sentry_error(token: str = Query(...)):
+    """🧪 Secret debug endpoint to test Sentry error tracking - requires authentication"""
+    try:
+        # Verify user is authenticated
+        user_payload = verify_jwt(token)
+        user_id = user_payload["sub"]
+        user_email = user_payload.get("email", "unknown")
+        
+        # Add some context for testing
+        if sentry_dsn:
+            sentry_sdk.add_breadcrumb(
+                message="User triggered Sentry test",
+                data={
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "test_type": "manual_debug_endpoint"
+                },
+                level="info"
+            )
+            sentry_sdk.set_tag("test_error", True)
+            sentry_sdk.set_tag("debug_endpoint", "/debug/sentry-test")
+            sentry_sdk.set_context("debug_test", {
+                "endpoint": "/debug/sentry-test",
+                "user_triggered": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "user_id": user_id,
+                "user_email": user_email
+            })
+        
+        # Deliberately throw a test error with user context
+        raise Exception(f"🧪 SENTRY TEST ERROR - This is intentional! User: {user_email} ({user_id[:8]}...) at {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
+        
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Authentication required for debug endpoints")
+    except Exception as e:
+        # Let FastAPI handle the error gracefully while Sentry captures it
+        if "SENTRY TEST ERROR" in str(e):
+            # This is our test error - let Sentry capture it but return a success response
+            return {
+                "status": "success", 
+                "message": "🎯 Test error thrown successfully! Check your Sentry dashboard in a few seconds.",
+                "error_preview": str(e)[:100] + "...",
+                "sentry_enabled": sentry_dsn is not None,
+                "instructions": "Look for the error in Sentry dashboard with your user email/ID attached"
+            }
+        else:
+            # This is an unexpected error - let it bubble up
+            raise HTTPException(status_code=500, detail=f"Unexpected error in test: {str(e)}")
+
 # Startup will be handled by the main execution at the bottom of the file
 
 
@@ -418,6 +490,15 @@ def verify_jwt(token):
                 audience=SUPABASE_JWT_AUDIENCE,
                 issuer=SUPABASE_JWT_ISSUER,
             )
+        
+        # Add user context to Sentry for debugging
+        if sentry_dsn:
+            sentry_sdk.set_user({
+                "id": payload.get("sub"),
+                "email": payload.get("email"),
+                "username": payload.get("email", "").split("@")[0] if payload.get("email") else None
+            })
+        
         return payload
     except ExpiredSignatureError:
         raise jwt.InvalidTokenError("Token has expired")
@@ -1215,11 +1296,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     connection_established = False
     conversation_id = None
     user_id = None
+    
+    # Start Sentry transaction for WebSocket connection
+    transaction = None
+    if sentry_dsn:
+        transaction = sentry_sdk.start_transaction(op="websocket", name="websocket_connection")
+        sentry_sdk.set_tag("connection_id", connection_id)
+    
     try:
         # Verify token before accepting the connection
         try:
             user_payload = verify_jwt(token)
             user_id = user_payload["sub"]
+            
+            # Add more context to Sentry
+            if sentry_dsn:
+                sentry_sdk.set_tag("user_id", user_id)
+                sentry_sdk.set_context("websocket", {
+                    "connection_id": connection_id,
+                    "user_id": user_id
+                })
+            
             logging.info(f"[WebSocket] Connection open: connection_id={connection_id}, user_id={user_id}")
         except Exception as e:
             logging.debug(f"[Connection {connection_id}] Authentication failed: {str(e)}")
@@ -1386,6 +1483,10 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
     except Exception as e:
         logging.error(f"[Connection {connection_id}] Unexpected error: {e}")
     finally:
+        # Finish Sentry transaction
+        if transaction:
+            transaction.finish()
+            
         if connection_established:
             try:
                 logging.info(f"[WebSocket] Connection closed: connection_id={connection_id}")
@@ -3109,6 +3210,17 @@ async def complete_lesson(
         user_id = user_payload["sub"]
         
         progress_id = request.progress_id
+        
+        # Add Sentry breadcrumb for lesson completion tracking
+        if sentry_dsn:
+            sentry_sdk.add_breadcrumb(
+                message="Lesson completion initiated",
+                data={
+                    "progress_id": progress_id,
+                    "user_id": user_id
+                },
+                level="info"
+            )
         
         # Update lesson progress to completed
         result = supabase.table('lesson_progress').update({

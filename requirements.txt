@@ -10,4 +10,5 @@ requests>=2.28.0
 pydantic==2.10.3
 openai>=1.0.0
 httpx>=0.24.0
-numpy>=1.21.0 
+numpy>=1.21.0
+sentry-sdk>=1.40.0 

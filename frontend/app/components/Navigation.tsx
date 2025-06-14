@@ -16,6 +16,7 @@ import {
 const Navigation = () => {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [debugClicks, setDebugClicks] = useState(0);
 
   const navigationItems = [
     { name: 'Dashboard', href: '/', icon: HomeIcon },
@@ -34,12 +35,60 @@ const Navigation = () => {
     }
   };
 
+  const handleSentryTest = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        alert('❌ Not authenticated');
+        return;
+      }
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:8000'}/debug/sentry-test?token=${session.access_token}`);
+      const result = await response.json();
+      
+      if (result.status === 'success') {
+        alert('🎯 Sentry test successful! Check your dashboard.');
+        setDebugClicks(0); // Reset clicks
+      } else {
+        alert('❌ Test failed: ' + (result.detail || 'Unknown error'));
+      }
+    } catch (error) {
+      alert('❌ Error: ' + error.message);
+    }
+  };
+
+  const handleLogoClick = () => {
+    setDebugClicks(prev => prev + 1);
+    setTimeout(() => setDebugClicks(0), 3000); // Reset after 3 seconds
+  };
+
   return (
     <>
       {/* Desktop Navigation */}
       <nav className="hidden md:flex fixed left-0 top-0 h-full w-64 bg-white border-r border-orange-100 flex-col">
-        <div className="p-4">
-          <h1 className="text-xl font-bold text-orange-600">Sarovia</h1>
+        <div className="p-4 relative group">
+          <div 
+            className="cursor-pointer"
+            onClick={handleLogoClick}
+          >
+            <h1 className="text-xl font-bold text-orange-600">Sarovia</h1>
+          </div>
+          
+          {/* Secret Debug Button - appears after 5 clicks or on logo hover */}
+          {(debugClicks >= 5 || debugClicks > 0) && (
+            <button
+              onClick={handleSentryTest}
+              className="absolute top-2 right-2 w-3 h-3 bg-orange-300 hover:bg-red-500 rounded-full opacity-30 hover:opacity-100 transition-all duration-200"
+              title="🧪 Sentry Debug Test"
+            />
+          )}
+          
+          {/* Alternative: Always visible but very discrete */}
+          <button
+            onClick={handleSentryTest}
+            className="absolute top-1 right-1 w-2 h-2 bg-gray-200 hover:bg-orange-500 rounded-full opacity-0 group-hover:opacity-50 hover:!opacity-100 transition-all duration-300"
+            title="🧪"
+          />
         </div>
         <div className="flex-1 px-2 py-4">
           {navigationItems.map((item) => {
@@ -73,7 +122,7 @@ const Navigation = () => {
 
       {/* Mobile Navigation */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-orange-100">
-        <div className="flex justify-around">
+        <div className="flex justify-around relative">
           {navigationItems.map((item) => {
             const isActive = pathname === item.href;
             return (
@@ -96,6 +145,13 @@ const Navigation = () => {
             <ArrowRightOnRectangleIcon className="h-6 w-6" />
             <span className="text-xs mt-1">Log Out</span>
           </button>
+          
+          {/* Mobile debug button - hidden in corner */}
+          <button
+            onClick={handleSentryTest}
+            className="absolute top-1 right-1 w-2 h-2 bg-gray-100 hover:bg-orange-400 rounded-full opacity-10 hover:opacity-80 transition-all duration-300"
+            title="🧪"
+          />
         </div>
       </nav>
     </>
