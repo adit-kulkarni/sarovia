@@ -105,7 +105,7 @@ if sentry_dsn:
     sentry_sdk.init(
         dsn=sentry_dsn,
         integrations=[
-            FastApiIntegration(auto_enable=True),
+            FastApiIntegration(),
             AsyncioIntegration(),
         ],
         traces_sample_rate=0.1,  # 10% of transactions for performance monitoring

@@ -53,7 +53,7 @@ const Navigation = () => {
         alert('❌ Test failed: ' + (result.detail || 'Unknown error'));
       }
     } catch (error) {
-      alert('❌ Error: ' + error.message);
+      alert('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
