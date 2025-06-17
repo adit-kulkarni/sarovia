@@ -17,6 +17,7 @@ import ProficiencyLevelChart from './components/ProficiencyLevelChart';
 import { createClient } from '@supabase/supabase-js';
 import { Dialog, Transition } from '@headlessui/react';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
+import { XMarkIcon } from '@heroicons/react/24/outline';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
 import WeaknessAnalysis from './components/WeaknessAnalysis';
@@ -439,6 +440,10 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   const [refreshing, setRefreshing] = useState(false);
   const [hasTimedOut, setHasTimedOut] = useState(false);
   const [isForceRefresh, setIsForceRefresh] = useState(false);
+  const [showLessonModal, setShowLessonModal] = useState(false);
+  const [selectedInsight, setSelectedInsight] = useState<any>(null);
+  const [lessonPreview, setLessonPreview] = useState<any>(null);
+  const [generatingLesson, setGeneratingLesson] = useState(false);
 
   const fetchInsights = async (forceRefresh = false) => {
     try {
@@ -490,6 +495,79 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
       setLoading(false);
       setRefreshing(false);
       setIsForceRefresh(false);
+    }
+  };
+
+  const handlePracticeNow = async (insight: any) => {
+    setSelectedInsight(insight);
+    setGeneratingLesson(true);
+    setShowLessonModal(true);
+    
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/api/generate_targeted_lesson?token=${token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          curriculum_id: curriculumId,
+          insight_data: {
+            category: insight.type.split('_')[0], // Extract category from type like "grammar_pattern"
+            message: insight.message,
+            severity: insight.severity,
+            chart_data: insight.chart_data || {}
+          },
+          language: language
+        })
+      });
+
+      if (response.ok) {
+        const lesson = await response.json();
+        setLessonPreview(lesson);
+      } else {
+        throw new Error('Failed to generate lesson');
+      }
+    } catch (err) {
+      console.error('Error generating targeted lesson:', err);
+      // Handle error - maybe show error message in modal
+    } finally {
+      setGeneratingLesson(false);
+    }
+  };
+
+  const handleCreateLesson = async () => {
+    if (!lessonPreview || !token) return;
+    
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/api/save_custom_lesson?token=${token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          curriculum_id: curriculumId,
+          language: language,
+          ...lessonPreview
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Close modal and navigate to practice
+        setShowLessonModal(false);
+        setLessonPreview(null);
+        setSelectedInsight(null);
+        
+        // Optionally show success message or navigate to the lesson
+        console.log('Lesson created successfully:', result);
+      } else {
+        throw new Error('Failed to save lesson');
+      }
+    } catch (err) {
+      console.error('Error saving lesson:', err);
+      // Could show error message to user
     }
   };
 
@@ -665,10 +743,12 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
                 <span className="capitalize">{insight.severity} priority</span>
               </div>
               
-              <div className="bg-blue-100 p-3 rounded">
-                <h4 className="font-medium text-blue-800 mb-1">Suggested Action</h4>
-                <p className="text-blue-700 text-sm">{insight.action}</p>
-              </div>
+                              <button
+                  onClick={() => handlePracticeNow(insight)}
+                  className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 px-4 rounded transition-colors"
+                >
+                  Practice Now
+                </button>
             </div>
           ))}
         </div>
@@ -676,7 +756,114 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
     );
   }
 
-  return renderInsightsContent();
+  return (
+    <>
+      {renderInsightsContent()}
+      
+      {/* Lesson Preview Modal */}
+      <Transition.Root show={showLessonModal} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setShowLessonModal(false)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black bg-opacity-30 transition-opacity" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 z-10 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                enterTo="opacity-100 translate-y-0 sm:scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+              >
+                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
+                  <div className="absolute right-0 top-0 hidden pr-4 pt-4 sm:block">
+                    <button
+                      type="button"
+                      className="rounded-md bg-white text-gray-400 hover:text-gray-500"
+                      onClick={() => setShowLessonModal(false)}
+                    >
+                      <XMarkIcon className="h-6 w-6" />
+                    </button>
+                  </div>
+                  
+                  <div className="sm:flex sm:items-start">
+                    <div className="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left w-full">
+                      <Dialog.Title as="h3" className="text-lg font-semibold leading-6 text-gray-900 mb-4">
+                        Practice Lesson Preview
+                      </Dialog.Title>
+                      
+                      {generatingLesson ? (
+                        <div className="text-center py-8">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mx-auto mb-4"></div>
+                          <p className="text-gray-600">Generating targeted lesson...</p>
+                        </div>
+                      ) : lessonPreview ? (
+                        <div className="space-y-4">
+                          <div>
+                            <h4 className="font-semibold text-gray-900">{lessonPreview.title}</h4>
+                            <p className="text-sm text-gray-600 mt-1">Difficulty: {lessonPreview.difficulty}</p>
+                          </div>
+                          
+                          <div>
+                            <h5 className="font-medium text-gray-900">Objectives:</h5>
+                            <p className="text-sm text-gray-700 mt-1">{lessonPreview.objectives}</p>
+                          </div>
+                          
+                          <div>
+                            <h5 className="font-medium text-gray-900">Content:</h5>
+                            <p className="text-sm text-gray-700 mt-1">{lessonPreview.content}</p>
+                          </div>
+                          
+                          {lessonPreview.cultural_element && (
+                            <div>
+                              <h5 className="font-medium text-gray-900">Cultural Context:</h5>
+                              <p className="text-sm text-gray-700 mt-1">{lessonPreview.cultural_element}</p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-gray-500">Failed to generate lesson. Please try again.</p>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {lessonPreview && !generatingLesson && (
+                    <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                      <button
+                        type="button"
+                        className="inline-flex w-full justify-center rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 sm:ml-3 sm:w-auto"
+                        onClick={handleCreateLesson}
+                      >
+                        Create & Practice
+                      </button>
+                      <button
+                        type="button"
+                        className="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
+                        onClick={() => setShowLessonModal(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
+    </>
+  );
 };
 
 const Dashboard = () => {

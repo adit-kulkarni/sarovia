@@ -5514,8 +5514,158 @@ async def generate_simple_insights(feedback_data: list, language: str) -> List[I
     
     return insights[:4]  # Limit to 4 insights for fast response
 
+@app.post("/api/generate_targeted_lesson")
+async def generate_targeted_lesson(
+    request: dict = Body(...),
+    token: str = Query(...)
+):
+    """Generate a lesson specifically targeting a single insight pattern"""
+    try:
+        # Verify JWT token
+        payload = verify_jwt(token)
+        user_id = payload['sub']
+        
+        curriculum_id = request.get('curriculum_id')
+        insight_data = request.get('insight_data', {})
+        language = request.get('language')
+        
+        if not curriculum_id or not insight_data or not language:
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Get user's current level for context
+        curriculum_result = supabase.table('curriculums') \
+            .select('start_level') \
+            .eq('id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        if not curriculum_result.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        level = curriculum_result.data[0]['start_level']
+        
+        # Extract specific pattern information from insight
+        category = insight_data.get('category', 'general')
+        message = insight_data.get('message', '')
+        severity = insight_data.get('severity', 'moderate')
+        chart_data = insight_data.get('chart_data', {})
+        
+        # Generate targeted lesson using OpenAI
+        lesson = await generate_targeted_lesson_with_openai(
+            category=category,
+            insight_message=message,
+            severity=severity,
+            examples=chart_data.get('examples', []),
+            language=language,
+            level=level
+        )
+        
+        return lesson
+        
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Session expired. Please refresh the page and try again.")
+    except Exception as e:
+        logging.error(f"Error generating targeted lesson: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate lesson: {str(e)}")
 
-
+async def generate_targeted_lesson_with_openai(
+    category: str, 
+    insight_message: str, 
+    severity: str, 
+    examples: list, 
+    language: str, 
+    level: str
+) -> dict:
+    """Generate a lesson specifically targeting one insight pattern"""
+    
+    client = AsyncOpenAI(api_key=API_KEY)
+    
+    # Create examples string from chart data
+    examples_text = ""
+    if examples:
+        examples_text = "\n".join([
+            f"- Error: '{ex.get('error', '')}' → Correction: '{ex.get('correction', '')}'" 
+            for ex in examples[:3]
+        ])
+    
+    difficulty_map = {
+        'high': 'Advanced',
+        'moderate': 'Intermediate', 
+        'low': 'Beginner'
+    }
+    difficulty = difficulty_map.get(severity, 'Intermediate')
+    
+    prompt = f"""
+    Create a highly focused {language} lesson for a {level} level learner targeting this specific problem:
+    
+    Issue: {insight_message}
+    Category: {category}
+    Severity: {severity}
+    
+    {f"Recent mistakes examples:{examples_text}" if examples_text else ""}
+    
+    Generate a lesson with:
+    1. Title (specific to this exact problem)
+    2. Difficulty level: {difficulty}
+    3. Clear learning objectives (focused only on this issue)
+    4. Lesson content explaining the specific rule/concept
+    5. Cultural context (if relevant)
+    6. Practice activity targeting this exact pattern
+    
+    Make it highly specific - don't cover multiple topics. Focus only on solving this one identified problem.
+    
+    Example format:
+    {{
+        "title": "Mastering Ser vs Estar with Emotions",
+        "difficulty": "Intermediate", 
+        "objectives": "Learn when to use ser vs estar specifically with emotional states and temporary conditions",
+        "content": "Detailed explanation of the specific rule...",
+        "cultural_element": "Cultural context about emotions in Spanish-speaking cultures",
+        "practice_activity": "Conversation scenarios specifically about feelings and states",
+        "targeted_weaknesses": ["{category}"]
+    }}
+    
+    Return only valid JSON.
+    """
+    
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        
+        content = response.choices[0].message.content
+        
+        # Clean up JSON response
+        if '```json' in content:
+            content = content.split('```json')[1].split('```')[0].strip()
+        elif '```' in content:
+            content = content.split('```')[1].split('```')[0].strip()
+        
+        lesson_data = json.loads(content)
+        
+        # Ensure required fields
+        lesson_data.setdefault('targeted_weaknesses', [category])
+        lesson_data.setdefault('difficulty', difficulty)
+        
+        return lesson_data
+        
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse lesson JSON: {e}")
+        # Return a fallback lesson
+        return {
+            "title": f"Practice {category.title()} Skills",
+            "difficulty": difficulty,
+            "objectives": f"Improve your {category} usage based on recent conversation patterns",
+            "content": f"This lesson focuses on {category} patterns identified in your conversations. {insight_message}",
+            "cultural_element": f"Cultural context for {category} usage in {language}",
+            "practice_activity": f"Guided conversation practice focusing on {category}",
+            "targeted_weaknesses": [category]
+        }
+    except Exception as e:
+        logging.error(f"Error generating targeted lesson: {e}")
+        raise
 
 
 if __name__ == "__main__":
