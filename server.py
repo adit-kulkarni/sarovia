@@ -5156,6 +5156,9 @@ async def get_conversation_summary(conversation_id: str, token: str = Query(...)
         
         # Get conversation achievements and verb progress
         achievements = []
+        
+        # Use shared function for word estimation
+        from report_card_shared import estimate_words_used
         total_words = estimate_words_used(total_turns)
         
         if curriculum_id:
@@ -5176,93 +5179,48 @@ async def get_conversation_summary(conversation_id: str, token: str = Query(...)
                 
                 # Generate verb-based achievements
                 if before_snapshot and after_snapshot:
-                    from optimized_lesson_summary import calculate_verb_achievements
+                    from report_card_shared import calculate_verb_achievements
                     verb_achievements = calculate_verb_achievements(before_snapshot, after_snapshot, f"Conversation: {context}")
                     achievements.extend(verb_achievements)
                 
             except Exception as e:
                 logging.warning(f"Could not generate verb achievements for conversation {conversation_id}: {e}")
         
-        # Get conversation feedback/mistakes
-        mistakes_by_category = []
-        total_mistakes = 0
-        new_vocabulary = []
-        improvement_areas = []
-        
+        # Use the shared report card generator for consistency
         try:
-            # Get feedback for all messages in this conversation - use the same pattern as lesson summary
-            if messages:
-                feedback_result = supabase.table('message_feedback').select('mistakes').in_('message_id', [m['id'] for m in messages]).execute()
-                feedbacks = feedback_result.data if feedback_result.data else []
-                
-                # Process mistakes - matches the working lesson pattern
-                category_counts = {}
-                all_mistakes = []
-                
-                for feedback in feedbacks:
-                    mistakes = feedback.get('mistakes', [])
-                    if mistakes:
-                        all_mistakes.extend(mistakes)
-                
-                for mistake in all_mistakes:
-                    category = mistake.get('category', 'Other')
-                    if category not in category_counts:
-                        category_counts[category] = {
-                            'category': category,
-                            'count': 0,
-                            'severity': 'minor',
-                            'examples': []
-                        }
-                    
-                    category_counts[category]['count'] += 1
-                    if len(category_counts[category]['examples']) < 2:
-                        category_counts[category]['examples'].append({
-                            'error': mistake.get('error', ''),
-                            'correction': mistake.get('correction', ''),
-                            'explanation': mistake.get('explanation', '')
-                        })
-                
-                total_mistakes = len(all_mistakes)
-                mistakes_by_category = list(category_counts.values())
-                
-                # Generate improvement areas based on most common mistakes
-                if mistakes_by_category:
-                    sorted_mistakes = sorted(mistakes_by_category, key=lambda x: x['count'], reverse=True)
-                    improvement_areas = [mistake['category'] for mistake in sorted_mistakes[:3]]
+            from report_card_shared import generate_report_card
+            
+            summary_data = await generate_report_card(
+                before_verbs=before_snapshot,
+                after_verbs=after_snapshot,
+                conversation_id=conversation_id,
+                turns_completed=total_turns,
+                title=f"{context} ({level})",
+                duration_str=duration_str,
+                user_id=user_id,
+                language=language
+            )
             
         except Exception as e:
-            logging.warning(f"Could not analyze conversation feedback: {e}")
+            logging.warning(f"Could not generate report card using shared function: {e}")
             import traceback
-            logging.warning(f"Feedback analysis traceback: {traceback.format_exc()}")
+            logging.warning(f"Report card generation traceback: {traceback.format_exc()}")
+            
+            # Fallback to basic summary data
+            summary_data = {
+                "lessonTitle": f"{context} ({level})",
+                "totalTurns": total_turns,
+                "totalMistakes": 0,
+                "achievements": achievements,
+                "mistakesByCategory": [],
+                "conversationDuration": duration_str,
+                "wordsUsed": total_words,
+                "conversationCount": 0,
+                "improvementAreas": ["Keep practicing conversation skills!"],
+                "conversationId": conversation_id
+            }
         
-        # Generate general achievements based on conversation metrics
-        if total_turns >= 5:
-            achievements.append({
-                "id": "conversation_engagement",
-                "title": f"Great Conversation!",
-                "description": f"You engaged in {total_turns} turns of conversation practice.",
-                "icon": "💬",
-                "type": "engagement",
-                "value": total_turns
-            })
-        
-
-        
-        # Create summary data structure - match lesson summary format exactly
-        summary_data = {
-            "lessonTitle": f"{context} ({level})",  # Use lessonTitle for consistency with modal
-            "totalTurns": total_turns,
-            "totalMistakes": total_mistakes,
-            "achievements": achievements,
-            "mistakesByCategory": mistakes_by_category,
-            "conversationDuration": duration_str,
-            "wordsUsed": total_words,
-            "newVocabulary": new_vocabulary,
-            "improvementAreas": improvement_areas,
-            "conversationId": conversation_id
-        }
-        
-        logging.info(f"[Conversation Summary] Generated summary with {len(achievements)} achievements and {total_mistakes} mistakes")
+        logging.info(f"[Conversation Summary] Generated summary with {len(summary_data.get('achievements', []))} achievements and {summary_data.get('totalMistakes', 0)} mistakes")
         
         return summary_data
         
@@ -5284,10 +5242,7 @@ def parse_datetime_safe_achievements(datetime_str):
         logging.error(f"Error parsing datetime '{datetime_str}': {e}")
         return datetime.now(timezone.utc)
 
-def estimate_words_used(turns_completed: int) -> int:
-    """Estimate words used based on conversation turns"""
-    # Rough estimate: average 8-12 words per user message
-    return turns_completed * 10
+
 
 
 

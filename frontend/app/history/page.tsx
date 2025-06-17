@@ -73,7 +73,7 @@ const HistoryPage = () => {
   // Report card modal state
   const [showReportCardModal, setShowReportCardModal] = useState(false);
   const [reportCardData, setReportCardData] = useState<any>(null);
-  const [loadingReportCard, setLoadingReportCard] = useState(false);
+  const [loadingReportCardId, setLoadingReportCardId] = useState<string | null>(null);
   const [reportCardError, setReportCardError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -197,7 +197,7 @@ const HistoryPage = () => {
       return;
     }
 
-    setLoadingReportCard(true);
+    setLoadingReportCardId(conversationId);
     setReportCardError(null);
 
     try {
@@ -229,7 +229,7 @@ const HistoryPage = () => {
       console.error('Error loading report card:', error);
       setReportCardError(error instanceof Error ? error.message : 'Failed to load report card');
     } finally {
-      setLoadingReportCard(false);
+      setLoadingReportCardId(null);
     }
   };
 
@@ -397,10 +397,10 @@ const HistoryPage = () => {
                             e.stopPropagation();
                             handleViewReportCard(conversation.id);
                           }}
-                          disabled={loadingReportCard}
+                          disabled={loadingReportCardId === conversation.id}
                           className="px-3 py-1.5 text-xs rounded-lg font-semibold shadow transition-colors bg-orange-300 hover:bg-orange-400 text-orange-800 disabled:opacity-50"
                         >
-                          {loadingReportCard ? 'Loading...' : '📊 Report Card'}
+                          {loadingReportCardId === conversation.id ? 'Loading...' : '📊 Report Card'}
                         </button>
                       </div>
                     </div>
@@ -435,7 +435,7 @@ const HistoryPage = () => {
           // Stay on history page - no redirect needed
         }}
         summaryData={reportCardData}
-        loading={loadingReportCard}
+        loading={loadingReportCardId !== null}
         token={token}
       />
 

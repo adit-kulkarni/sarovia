@@ -56,7 +56,7 @@ interface LessonSummaryData {
   mistakesByCategory: MistakeSummary[];
   conversationDuration: string;
   wordsUsed: number;
-  newVocabulary: string[];
+  conversationCount: number;
   improvementAreas: string[];
   conversationId?: string;
 }
@@ -266,8 +266,8 @@ export default function LessonSummaryModal({
                         <div className="text-sm text-gray-600 font-medium">Words Used</div>
                       </div>
                       <div className="bg-white rounded-xl p-4 shadow-lg border-2 border-green-200 text-center">
-                        <div className="text-2xl font-bold text-green-600">{summaryData.newVocabulary.length}</div>
-                        <div className="text-sm text-gray-600 font-medium">New Vocabulary</div>
+                        <div className="text-2xl font-bold text-green-600">#{summaryData.conversationCount}</div>
+                        <div className="text-sm text-gray-600 font-medium">Conversation #</div>
                       </div>
                       <div className="bg-white rounded-xl p-4 shadow-lg border-2 border-purple-200 text-center">
                         <div className="text-2xl font-bold text-purple-600">{summaryData.conversationDuration}</div>

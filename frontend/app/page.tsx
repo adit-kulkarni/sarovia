@@ -94,7 +94,7 @@ interface LessonSummaryData {
   mistakesByCategory: MistakeSummary[];
   conversationDuration: string;
   wordsUsed: number;
-  newVocabulary: string[];
+  conversationCount: number;
   improvementAreas: string[];
   conversationId?: string;
 }
