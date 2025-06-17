@@ -4286,7 +4286,52 @@ async def get_user_insights(
             logging.info(f"Force refresh requested - invalidated cache for user {user_id}, curriculum {curriculum_id}")
         
         try:
-            return await get_cached_insights_or_generate(user_id, curriculum_id, language, days)
+            # Add timeout handling for the full insights generation
+            import asyncio
+            return await asyncio.wait_for(
+                get_cached_insights_or_generate(user_id, curriculum_id, language, days),
+                timeout=30.0  # 30 second timeout
+            )
+        except asyncio.TimeoutError:
+            logging.warning(f"Insights generation timed out for user {user_id}, curriculum {curriculum_id}")
+            # Return simple insights as fallback
+            try:
+                # Quick fallback - get basic feedback data
+                feedback_result = supabase.table('message_feedback') \
+                    .select('mistakes, created_at, messages!inner(conversation_id, conversations!inner(user_id, curriculum_id))') \
+                    .eq('messages.conversations.user_id', user_id) \
+                    .eq('messages.conversations.curriculum_id', curriculum_id) \
+                    .limit(100) \
+                    .execute()
+                
+                if feedback_result.data and len(feedback_result.data) >= 3:
+                    simple_insights = await generate_simple_insights(feedback_result.data, language)
+                    unique_conversations = len(set(f['messages']['conversation_id'] for f in feedback_result.data))
+                    
+                    return InsightsResponse(
+                        insights=simple_insights,
+                        last_updated=datetime.now(timezone.utc),
+                        analysis_period=f"{days} days (simplified due to timeout)",
+                        summary={
+                            'total_patterns': len(simple_insights),
+                            'total_conversations': unique_conversations,
+                            'improvement_areas': len([i for i in simple_insights if i.severity in ['moderate', 'high']])
+                        }
+                    )
+            except Exception as fallback_error:
+                logging.error(f"Fallback insights also failed: {fallback_error}")
+            
+            # Final fallback
+            return InsightsResponse(
+                insights=[],
+                last_updated=datetime.now(timezone.utc),
+                analysis_period=f"{days} days",
+                summary={
+                    'total_patterns': 0,
+                    'total_conversations': 0,
+                    'improvement_areas': 0
+                }
+            )
         except Exception as cache_error:
             logging.error(f"Error in caching function: {cache_error}")
             # Fallback: return empty insights instead of crashing
@@ -5242,6 +5287,232 @@ def parse_datetime_safe_achievements(datetime_str):
         logging.error(f"Error parsing datetime '{datetime_str}': {e}")
         return datetime.now(timezone.utc)
 
+@app.get("/api/insights/fast", response_model=InsightsResponse)
+async def get_user_insights_fast(
+    curriculum_id: str = Query(...),
+    days: int = Query(default=30),
+    token: str = Query(...)
+):
+    """Fast insights endpoint with optimized queries and caching"""
+    try:
+        # Verify JWT token
+        payload = verify_jwt(token)
+        user_id = payload['sub']
+        
+        logging.info(f"Getting fast insights for user {user_id}, curriculum {curriculum_id}")
+        
+        # Get curriculum to determine language
+        curriculum_result = supabase.table('curriculums') \
+            .select('language') \
+            .eq('id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        if not curriculum_result.data:
+            raise HTTPException(status_code=404, detail="Curriculum not found")
+        
+        language = curriculum_result.data[0]['language']
+        
+        # Check for cached insights first (but don't force regeneration)
+        cached_result = supabase.table('cached_insights') \
+            .select('*') \
+            .eq('curriculum_id', curriculum_id) \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        # If we have recent cached insights (less than 2 hours old), return them
+        if cached_result.data and len(cached_result.data) > 0:
+            cached = cached_result.data[0]
+            try:
+                updated_at = datetime.fromisoformat(cached['updated_at'].replace('Z', '+00:00'))
+                age_hours = (datetime.now(timezone.utc) - updated_at).total_seconds() / 3600
+                
+                if age_hours < 2:  # Use cache if less than 2 hours old
+                    logging.info(f"Returning recent cached insights (age: {age_hours:.1f}h)")
+                    insights_data = cached['insights_data']
+                    
+                    return InsightsResponse(
+                        insights=[InsightCard(**insight) for insight in insights_data['insights']],
+                        last_updated=updated_at,
+                        analysis_period=insights_data['analysis_period'],
+                        summary=insights_data['summary']
+                    )
+            except Exception as parse_error:
+                logging.warning(f"Error parsing cached insights: {parse_error}")
+                # Continue to generate new insights
+        
+        # Generate simplified insights for speed
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=days)
+        
+        # Simplified feedback query - just get basic counts
+        feedback_result = supabase.table('message_feedback') \
+            .select('mistakes, created_at, messages!inner(conversation_id, conversations!inner(user_id, curriculum_id))') \
+            .eq('messages.conversations.user_id', user_id) \
+            .eq('messages.conversations.curriculum_id', curriculum_id) \
+            .gte('created_at', start_date.isoformat()) \
+            .limit(500) \
+            .execute()
+        
+        if not feedback_result.data or len(feedback_result.data) < 3:
+            # Not enough data for insights
+            return InsightsResponse(
+                insights=[],
+                last_updated=datetime.now(timezone.utc),
+                analysis_period=f"{days} days",
+                summary={
+                    'total_patterns': 0,
+                    'total_conversations': 0,
+                    'improvement_areas': 0
+                }
+            )
+        
+        # Generate simplified insight cards without AI
+        insights = await generate_simple_insights(feedback_result.data, language)
+        
+        # Create summary
+        unique_conversations = len(set(f['messages']['conversation_id'] for f in feedback_result.data))
+        total_mistakes = sum(len(f.get('mistakes', [])) for f in feedback_result.data)
+        
+        summary = {
+            'total_patterns': len(insights),
+            'total_conversations': unique_conversations,
+            'improvement_areas': len([i for i in insights if i.severity in ['moderate', 'high']])
+        }
+        
+        response = InsightsResponse(
+            insights=insights,
+            last_updated=datetime.now(timezone.utc),
+            analysis_period=f"{days} days",
+            summary=summary
+        )
+        
+        # Cache the results
+        insights_data = {
+            'insights': [card.dict() for card in insights],
+            'last_updated': response.last_updated.isoformat(),
+            'analysis_period': response.analysis_period,
+            'summary': response.summary
+        }
+        
+        # Upsert cached insights
+        if cached_result.data and len(cached_result.data) > 0:
+            supabase.table('cached_insights') \
+                .update({
+                    'insights_data': insights_data,
+                    'last_feedback_count': len(feedback_result.data),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }) \
+                .eq('curriculum_id', curriculum_id) \
+                .eq('user_id', user_id) \
+                .execute()
+        else:
+            supabase.table('cached_insights') \
+                .insert({
+                    'curriculum_id': curriculum_id,
+                    'user_id': user_id,
+                    'insights_data': insights_data,
+                    'last_feedback_count': len(feedback_result.data),
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }) \
+                .execute()
+        
+        return response
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT token error: {e}")
+        raise HTTPException(status_code=401, detail="Session expired. Please refresh the page and try again.")
+    except Exception as e:
+        logging.error(f"Error generating fast insights: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate insights: {str(e)}")
+
+async def generate_simple_insights(feedback_data: list, language: str) -> List[InsightCard]:
+    """Generate insights without AI for faster response"""
+    insights = []
+    
+    # Count mistakes by category
+    mistake_counts = defaultdict(int)
+    total_mistakes = 0
+    recent_mistakes = []
+    
+    for feedback in feedback_data:
+        for mistake in feedback.get('mistakes', []):
+            category = mistake.get('category', 'unknown')
+            mistake_counts[category] += 1
+            total_mistakes += 1
+            
+            # Track recent mistakes for examples
+            try:
+                created_at = datetime.fromisoformat(feedback['created_at'].replace('Z', '+00:00'))
+                recent_mistakes.append((created_at, mistake, category))
+            except:
+                recent_mistakes.append((datetime.now(), mistake, category))
+    
+    if total_mistakes == 0:
+        return []
+    
+    # Sort mistakes by recency and category frequency
+    recent_mistakes.sort(key=lambda x: x[0], reverse=True)
+    top_categories = sorted(mistake_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    
+    # Generate insights based on patterns
+    for i, (category, count) in enumerate(top_categories):
+        percentage = (count / total_mistakes) * 100
+        
+        # Find examples for this category
+        examples = [m[1] for m in recent_mistakes if m[2] == category][:2]
+        
+        if percentage > 40:
+            severity = 'high'
+            trend = 'increasing'
+            message = f"Your {category} mistakes make up {percentage:.0f}% of all errors"
+            action = f"Focus on {category} rules and practice specific exercises"
+        elif percentage > 20:
+            severity = 'moderate'  
+            trend = 'stable'
+            message = f"{category.title()} needs attention ({percentage:.0f}% of mistakes)"
+            action = f"Review {category} fundamentals and practice regularly"
+        else:
+            severity = 'low'
+            trend = 'stable'
+            message = f"Minor {category} issues ({percentage:.0f}% of mistakes)"
+            action = f"Occasional {category} review recommended"
+        
+        insights.append(InsightCard(
+            id=str(uuid.uuid4()),
+            message=message,
+            type=f"{category}_pattern",
+            severity=severity,
+            trend=trend,
+            action=action,
+            chart_type='category_comparison',
+            chart_data={
+                'category': category,
+                'count': count,
+                'percentage': percentage,
+                'examples': examples[:2]
+            }
+        ))
+    
+    # Add overall progress insight
+    if len(feedback_data) >= 10:
+        insights.append(InsightCard(
+            id=str(uuid.uuid4()),
+            message=f"Analyzed {len(feedback_data)} messages with {total_mistakes} total mistakes",
+            type='progress_summary',
+            severity='low',
+            trend='stable',
+            action="Keep practicing to see improvement trends",
+            chart_type='progress_trend',
+            chart_data={
+                'total_feedback': len(feedback_data),
+                'total_mistakes': total_mistakes,
+                'avg_mistakes_per_message': total_mistakes / len(feedback_data)
+            }
+        ))
+    
+    return insights[:4]  # Limit to 4 insights for fast response
 
 
 

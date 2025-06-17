@@ -437,55 +437,149 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [hasTimedOut, setHasTimedOut] = useState(false);
+  const [isForceRefresh, setIsForceRefresh] = useState(false);
 
   const fetchInsights = async (forceRefresh = false) => {
     try {
       const loadingState = forceRefresh ? setRefreshing : setLoading;
       loadingState(true);
       setError(null);
+      setHasTimedOut(false);
+      setIsForceRefresh(forceRefresh);
       
-      // Add cache-busting parameter for force refresh
-      const url = `${API_BASE}/api/insights?curriculum_id=${curriculumId}&days=30&token=${token}${forceRefresh ? '&refresh=true' : ''}`;
-      const response = await fetch(url);
+      // Add timeout handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        setHasTimedOut(true);
+      }, 45000); // 45 second timeout
+      
+      // Use fast endpoint by default, fallback to full insights on refresh
+      const endpoint = forceRefresh ? 'insights' : 'insights/fast';
+      const url = `${API_BASE}/api/${endpoint}?curriculum_id=${curriculumId}&days=30&token=${token}${forceRefresh ? '&refresh=true' : ''}`;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'Cache-Control': forceRefresh ? 'no-cache' : 'default'
+        }
+      });
+      
+      clearTimeout(timeoutId);
       
       if (response.ok) {
         const data = await response.json();
+        console.log('Insights API response:', data);
         setInsights(data);
+        setError(null);
       } else {
+        const errorText = await response.text();
+        console.error('Insights API error:', response.status, errorText);
         throw new Error(`Failed to fetch insights: ${response.status}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching insights:', err);
-      setError('Failed to load insights from your conversation data');
+      if (err.name === 'AbortError' || hasTimedOut) {
+        setError('Insights are taking longer than usual to load. This may be due to analyzing a large amount of conversation data. Please try again or use the Refresh button.');
+        setHasTimedOut(true);
+      } else {
+        setError('Failed to load insights from your conversation data. Please try refreshing.');
+      }
+      // Don't clear insights on error - keep showing previous data if available
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setIsForceRefresh(false);
     }
   };
 
   useEffect(() => {
+    let mounted = true;
+    
     if (curriculumId && token) {
-      fetchInsights();
+      fetchInsights().then(() => {
+        if (!mounted) return;
+        // Component is still mounted after fetch
+      });
     }
+    
+    return () => {
+      mounted = false;
+    };
   }, [curriculumId, token, language]);
 
+  // Loading state with timeout message
   if (loading) {
     return (
-      <div className="animate-pulse space-y-4">
-        <div className="h-32 bg-gray-200 rounded"></div>
-        <div className="h-32 bg-gray-200 rounded"></div>
+      <div className="space-y-4">
+        <div className="animate-pulse space-y-4">
+          <div className="h-32 bg-gray-200 rounded"></div>
+          <div className="h-32 bg-gray-200 rounded"></div>
+        </div>
+        <div className="text-center text-gray-600 mt-4">
+          <p className="mb-2">Analyzing your conversation patterns...</p>
+          <p className="text-sm text-gray-500">
+            {isForceRefresh ? 
+              'Generating comprehensive insights (may take up to 45 seconds)' : 
+              'Loading fast insights (usually 5-10 seconds)'
+            }
+          </p>
+          {hasTimedOut && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+              <p className="text-yellow-800 text-sm">
+                Analysis is taking longer than expected. You can wait or try refreshing.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
-  if (error) {
+  // Error state - but preserve insights if we have them
+  if (error && !insights) {
     return (
       <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <p className="text-red-600">{error}</p>
+        <div className="flex items-start">
+          <div className="flex-shrink-0">
+            <div className="text-red-400">⚠️</div>
+          </div>
+          <div className="ml-3 flex-1">
+            <h3 className="text-sm font-medium text-red-800">
+              Unable to Load Insights
+            </h3>
+            <p className="mt-1 text-sm text-red-700">{error}</p>
+            <div className="mt-4">
+              <button
+                onClick={() => fetchInsights(true)}
+                disabled={refreshing}
+                className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+              >
+                {refreshing ? 'Retrying...' : 'Try Again'}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
 
+  // Show error banner but keep insights visible
+  if (error && insights) {
+    return (
+      <div className="space-y-4">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+          <p className="text-yellow-800 text-sm">
+            ⚠️ Unable to refresh insights: {error}
+          </p>
+        </div>
+        {/* Render insights below */}
+        {renderInsightsContent()}
+      </div>
+    );
+  }
+
+  // No insights but no error - show friendly message
   if (!insights || !insights.insights || insights.insights.length === 0) {
     return (
       <div className="text-center py-8">
@@ -495,83 +589,94 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
           You need more conversation feedback data to generate AI insights. Have a few more conversations 
           and come back to see personalized analysis of your learning patterns.
         </p>
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-gray-500 mb-4">
           <p>• Minimum: 5-10 conversations with feedback</p>
           <p>• Better insights: 20+ conversations over several days</p>
+        </div>
+        <button
+          onClick={() => fetchInsights(true)}
+          disabled={refreshing}
+          className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50"
+        >
+          {refreshing ? 'Checking...' : 'Check for Insights'}
+        </button>
+      </div>
+    );
+  }
+
+  function renderInsightsContent() {
+    return (
+      <div className="space-y-4">
+        {/* Summary */}
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-orange-800">Analysis Summary</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fetchInsights(true)}
+                disabled={refreshing}
+                className="text-xs text-orange-600 bg-orange-200 hover:bg-orange-300 px-2 py-1 rounded transition-colors disabled:opacity-50"
+                title="Refresh insights with latest data"
+              >
+                {refreshing ? '🔄 Refreshing...' : '🔄 Refresh'}
+              </button>
+              <div className="text-xs text-orange-600 bg-orange-200 px-2 py-1 rounded">
+                Updated: {new Date(insights.last_updated).toLocaleDateString()}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-2xl font-bold text-orange-600">{insights.summary.total_conversations}</div>
+              <div className="text-orange-700">Conversations Analyzed</div>
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-orange-600">{insights.summary.total_patterns}</div>
+              <div className="text-orange-700">Patterns Identified</div>
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-orange-600">{insights.analysis_period}</div>
+              <div className="text-orange-700">Analysis Period</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Insights Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {insights.insights.map((insight: any) => (
+            <div
+              key={insight.id}
+              className={`border rounded-lg p-4 transition-all duration-200 hover:shadow-md ${
+                insight.severity === 'high' ? 'border-red-200 bg-red-50' :
+                insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
+                'border-green-200 bg-green-50'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <p className="text-gray-800 font-medium flex-1">{insight.message}</p>
+                <span className="text-xl ml-2">
+                  {insight.trend === 'improving' ? '↗' : insight.trend === 'stable' ? '→' : '↘'}
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
+                <span className="capitalize">{insight.trend}</span>
+                <span>•</span>
+                <span className="capitalize">{insight.severity} priority</span>
+              </div>
+              
+              <div className="bg-blue-100 p-3 rounded">
+                <h4 className="font-medium text-blue-800 mb-1">Suggested Action</h4>
+                <p className="text-blue-700 text-sm">{insight.action}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Summary */}
-      <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="font-semibold text-orange-800">Analysis Summary</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => fetchInsights(true)}
-              disabled={refreshing}
-              className="text-xs text-orange-600 bg-orange-200 hover:bg-orange-300 px-2 py-1 rounded transition-colors disabled:opacity-50"
-              title="Refresh insights with latest data"
-            >
-              {refreshing ? '🔄 Refreshing...' : '🔄 Refresh'}
-            </button>
-            <div className="text-xs text-orange-600 bg-orange-200 px-2 py-1 rounded">
-              Updated: {new Date(insights.last_updated).toLocaleDateString()}
-            </div>
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-4 text-sm">
-          <div>
-            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_conversations}</div>
-            <div className="text-orange-700">Conversations Analyzed</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-orange-600">{insights.summary.total_patterns}</div>
-            <div className="text-orange-700">Patterns Identified</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-orange-600">{insights.analysis_period}</div>
-            <div className="text-orange-700">Analysis Period</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Insights Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {insights.insights.map((insight: any) => (
-          <div
-            key={insight.id}
-            className={`border rounded-lg p-4 transition-all duration-200 hover:shadow-md ${
-              insight.severity === 'high' ? 'border-red-200 bg-red-50' :
-              insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
-              'border-green-200 bg-green-50'
-            }`}
-          >
-            <div className="flex items-start justify-between mb-3">
-              <p className="text-gray-800 font-medium flex-1">{insight.message}</p>
-              <span className="text-xl ml-2">
-                {insight.trend === 'improving' ? '↗' : insight.trend === 'stable' ? '→' : '↘'}
-              </span>
-            </div>
-            
-            <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
-              <span className="capitalize">{insight.trend}</span>
-              <span>•</span>
-              <span className="capitalize">{insight.severity} priority</span>
-            </div>
-            
-            <div className="bg-blue-100 p-3 rounded">
-              <h4 className="font-medium text-blue-800 mb-1">Suggested Action</h4>
-              <p className="text-blue-700 text-sm">{insight.action}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return renderInsightsContent();
 };
 
 const Dashboard = () => {
