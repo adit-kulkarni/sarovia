@@ -20,7 +20,7 @@ import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
-import WeaknessAnalysis from './components/WeaknessAnalysis';
+
 import LessonSummaryModal from './components/LessonSummaryModal';
 
 interface LanguageCard {
@@ -273,7 +273,21 @@ const ProgressSection = ({
   knowledgeRefreshKey: number;
   token: string | null;
 }) => {
-  const [activeTab, setActiveTab] = useState('timeline');
+  // Persist tab state in localStorage to survive component remounting
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('progressActiveTab') || 'timeline';
+    }
+    return 'timeline';
+  });
+
+  // Update localStorage when tab changes
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('progressActiveTab', tab);
+    }
+  };
   
   // Get all mistakes from feedbacks
   const allMistakes = filteredFeedbacks.reduce((acc, feedback) => [...acc, ...feedback.mistakes], [] as Mistake[]);
@@ -304,7 +318,7 @@ const ProgressSection = ({
       <div className="mb-8">
         <nav className="flex justify-center space-x-3">
           <button
-            onClick={() => setActiveTab('timeline')}
+            onClick={() => handleTabChange('timeline')}
             className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'timeline'
                 ? 'bg-orange-500 text-white shadow-lg'
@@ -314,7 +328,7 @@ const ProgressSection = ({
             🚀 Growth
           </button>
           <button
-            onClick={() => setActiveTab('growth')}
+            onClick={() => handleTabChange('growth')}
             className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'growth'
                 ? 'bg-orange-500 text-white shadow-lg'
@@ -324,7 +338,7 @@ const ProgressSection = ({
             🧠 Knowledge
           </button>
           <button
-            onClick={() => setActiveTab('data')}
+            onClick={() => handleTabChange('data')}
             className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'data'
                 ? 'bg-orange-500 text-white shadow-lg'
@@ -334,7 +348,7 @@ const ProgressSection = ({
             📝 Feedback
           </button>
           <button
-            onClick={() => setActiveTab('insights')}
+            onClick={() => handleTabChange('insights')}
             className={`py-4 px-6 rounded-full font-bold text-lg transition-all duration-200 ${
               activeTab === 'insights'
                 ? 'bg-orange-500 text-white shadow-lg'
@@ -381,14 +395,7 @@ const ProgressSection = ({
             />
           )}
           
-          {/* Custom Lessons Section */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <WeaknessAnalysis 
-              curriculumId={selectedCurriculum.id} 
-              language={selectedCurriculum.language}
-              token={token || ''}
-            />
-          </div>
+
         </div>
       )}
 
@@ -434,6 +441,7 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   token: string; 
   language: string; 
 }) => {
+  const router = useRouter();
   const [insights, setInsights] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -541,7 +549,9 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
     
     try {
       const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
-      const response = await fetch(`${API_BASE}/api/save_custom_lesson?token=${token}`, {
+      
+      // Step 1: Save the lesson
+      const saveResponse = await fetch(`${API_BASE}/api/save_custom_lesson?token=${token}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -553,21 +563,42 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
         })
       });
 
-      if (response.ok) {
-        const result = await response.json();
-        // Close modal and navigate to practice
-        setShowLessonModal(false);
-        setLessonPreview(null);
-        setSelectedInsight(null);
-        
-        // Optionally show success message or navigate to the lesson
-        console.log('Lesson created successfully:', result);
-      } else {
+      if (!saveResponse.ok) {
         throw new Error('Failed to save lesson');
       }
+
+      const savedLesson = await saveResponse.json();
+      console.log('Lesson created successfully:', savedLesson);
+
+      // Step 2: Start a conversation with the custom lesson
+      const startResponse = await fetch(`${API_BASE}/api/start_custom_lesson_conversation?token=${token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          custom_lesson_id: savedLesson.id,
+          curriculum_id: curriculumId,
+        }),
+      });
+
+      if (!startResponse.ok) {
+        throw new Error('Failed to start lesson conversation');
+      }
+
+      const conversationData = await startResponse.json();
+
+      // Step 3: Close modal and navigate to chat
+      setShowLessonModal(false);
+      setLessonPreview(null);
+      setSelectedInsight(null);
+      
+      // Navigate to the chat interface with the new conversation
+      router.push(`/chat?conversation=${conversationData.conversation_id}&curriculum_id=${curriculumId}`);
+      
     } catch (err) {
-      console.error('Error saving lesson:', err);
-      // Could show error message to user
+      console.error('Error creating and starting lesson:', err);
+      alert(err instanceof Error ? err.message : 'Failed to create and start lesson');
     }
   };
 
@@ -724,31 +755,30 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
           {insights.insights.map((insight: any) => (
             <div
               key={insight.id}
-              className={`border rounded-lg p-4 transition-all duration-200 hover:shadow-md ${
+              className={`border rounded-lg transition-all duration-200 hover:shadow-md overflow-hidden ${
                 insight.severity === 'high' ? 'border-red-200 bg-red-50' :
                 insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
                 'border-green-200 bg-green-50'
               }`}
             >
-              <div className="flex items-start justify-between mb-3">
-                <p className="text-gray-800 font-medium flex-1">{insight.message}</p>
-                <span className="text-xl ml-2">
-                  {insight.trend === 'improving' ? '↗' : insight.trend === 'stable' ? '→' : '↘'}
-                </span>
+              {/* Content Area */}
+              <div className="p-4">
+                <p className="text-gray-800 font-medium">{insight.message}</p>
               </div>
               
-              <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
-                <span className="capitalize">{insight.trend}</span>
-                <span>•</span>
-                <span className="capitalize">{insight.severity} priority</span>
-              </div>
-              
-                              <button
+              {/* Bottom: Action Button */}
+              <div className={`px-4 h-14 flex items-center justify-end border-t ${
+                insight.severity === 'high' ? 'border-red-200 bg-red-50' :
+                insight.severity === 'moderate' ? 'border-orange-200 bg-orange-50' :
+                'border-green-200 bg-green-50'
+              }`}>
+                <button
                   onClick={() => handlePracticeNow(insight)}
-                  className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 px-4 rounded transition-colors"
+                  className="px-3 py-1.5 text-xs rounded-lg font-semibold shadow transition-colors bg-transparent border-2 border-orange-300 text-orange-800 hover:border-orange-400 hover:bg-orange-50"
                 >
-                  Practice Now
+                  🎯 Practice Now
                 </button>
+              </div>
             </div>
           ))}
         </div>

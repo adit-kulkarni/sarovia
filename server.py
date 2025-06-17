@@ -2443,9 +2443,28 @@ async def start_custom_lesson_conversation(
     language = curriculum['language']
     level = lesson.get('difficulty', curriculum.get('start_level', 'A1'))
     
+    # Map language code to full language name
+    language_names = {
+        'en': 'English',
+        'es': 'Spanish', 
+        'fr': 'French',
+        'de': 'German',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'kn': 'Kannada'
+    }
+    language_name = language_names.get(language, language)
+    
     # Create custom instructions for this lesson
     base_instructions = f"""
-You are a {language} teacher conducting a custom lesson designed to address the student's specific weaknesses.
+You are a {language_name} teacher conducting a custom lesson designed to address the student's specific weaknesses.
+
+CRITICAL LANGUAGE INSTRUCTION: 
+- You MUST speak in {language_name} throughout this lesson
+- Conduct the entire lesson in {language_name} 
+- Speak at the {level} CEFR level with appropriate complexity
+- Your sentence length should match the {level} CEFR level (A1 = short, simple sentences)
+- Only provide English explanations when absolutely necessary to clarify difficult concepts
 
 LESSON DETAILS:
 Title: {lesson.get('title', '')}
@@ -2464,13 +2483,13 @@ CULTURAL ELEMENT:
 PRACTICE ACTIVITY:
 {lesson.get('practice_activity', '')}
 
-IMPORTANT INSTRUCTIONS:
+IMPORTANT TEACHING INSTRUCTIONS:
 - Focus specifically on the targeted weakness areas mentioned above
 - Provide immediate corrections when students make the types of mistakes this lesson addresses
 - Be patient and encouraging, as these are areas the student struggles with
 - Use examples and exercises that directly relate to their common mistakes
-- Speak at the {level} CEFR level with appropriate complexity
-- Provide English explanations when needed to clarify difficult concepts
+- Try to keep the conversation flowing naturally in {language_name}
+- If the conversation stalls, suggest practicing the same concepts repeatedly
 """
     
     # Create conversation
@@ -5580,6 +5599,18 @@ async def generate_targeted_lesson_with_openai(
     
     client = AsyncOpenAI(api_key=API_KEY)
     
+    # Map language code to full language name
+    language_names = {
+        'en': 'English',
+        'es': 'Spanish', 
+        'fr': 'French',
+        'de': 'German',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'kn': 'Kannada'
+    }
+    language_name = language_names.get(language, language)
+    
     # Create examples string from chart data
     examples_text = ""
     if examples:
@@ -5596,7 +5627,7 @@ async def generate_targeted_lesson_with_openai(
     difficulty = difficulty_map.get(severity, 'Intermediate')
     
     prompt = f"""
-    Create a highly focused {language} lesson for a {level} level learner targeting this specific problem:
+    Create a highly focused {language_name} lesson for a {level} level learner targeting this specific problem:
     
     Issue: {insight_message}
     Category: {category}
@@ -5659,7 +5690,7 @@ async def generate_targeted_lesson_with_openai(
             "difficulty": difficulty,
             "objectives": f"Improve your {category} usage based on recent conversation patterns",
             "content": f"This lesson focuses on {category} patterns identified in your conversations. {insight_message}",
-            "cultural_element": f"Cultural context for {category} usage in {language}",
+            "cultural_element": f"Cultural context for {category} usage in {language_name}",
             "practice_activity": f"Guided conversation practice focusing on {category}",
             "targeted_weaknesses": [category]
         }
