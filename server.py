@@ -5538,51 +5538,38 @@ async def generate_targeted_lesson(
     request: dict = Body(...),
     token: str = Query(...)
 ):
-    """Generate a lesson specifically targeting a single insight pattern"""
     try:
-        # Verify JWT token
+        # Verify JWT token and get user ID
         payload = verify_jwt(token)
-        user_id = payload['sub']
+        user_id = payload.get("sub") or payload.get("user_id")
         
+        # Extract request data
         curriculum_id = request.get('curriculum_id')
         insight_data = request.get('insight_data', {})
-        language = request.get('language')
+        language = request.get('language', 'es')
         
-        if not curriculum_id or not insight_data or not language:
-            raise HTTPException(status_code=400, detail="Missing required fields")
+        # Get curriculum to determine level
+        curriculum_result = supabase.table('curriculums').select('start_level').eq('id', curriculum_id).execute()
+        level = 'A1'  # Default
+        if curriculum_result.data:
+            level = curriculum_result.data[0]['start_level']
         
-        # Get user's current level for context
-        curriculum_result = supabase.table('curriculums') \
-            .select('start_level') \
-            .eq('id', curriculum_id) \
-            .eq('user_id', user_id) \
-            .execute()
-        
-        if not curriculum_result.data:
-            raise HTTPException(status_code=404, detail="Curriculum not found")
-        
-        level = curriculum_result.data[0]['start_level']
-        
-        # Extract specific pattern information from insight
-        category = insight_data.get('category', 'general')
+        # Extract insight information
+        category = insight_data.get('category', 'grammar')
         message = insight_data.get('message', '')
-        severity = insight_data.get('severity', 'moderate')
-        chart_data = insight_data.get('chart_data', {})
+        severity = insight_data.get('severity', 'medium')
+        examples = insight_data.get('chart_data', {}).get('examples', [])
         
-        # Generate targeted lesson using OpenAI
-        lesson = await generate_targeted_lesson_with_openai(
-            category=category,
-            insight_message=message,
-            severity=severity,
-            examples=chart_data.get('examples', []),
-            language=language,
-            level=level
+        # Generate lesson using OpenAI
+        lesson_data = await generate_targeted_lesson_with_openai(
+            category, message, severity, examples, language, level
         )
         
-        return lesson
+        return lesson_data
         
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Session expired. Please refresh the page and try again.")
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     except Exception as e:
         logging.error(f"Error generating targeted lesson: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate lesson: {str(e)}")
@@ -5595,108 +5582,214 @@ async def generate_targeted_lesson_with_openai(
     language: str, 
     level: str
 ) -> dict:
-    """Generate a lesson specifically targeting one insight pattern"""
+    """Generate a targeted lesson using OpenAI based on specific insights"""
     
-    client = AsyncOpenAI(api_key=API_KEY)
-    
-    # Map language code to full language name
+    # Map languages to their names
     language_names = {
-        'en': 'English',
-        'es': 'Spanish', 
+        'es': 'Spanish',
+        'en': 'English', 
         'fr': 'French',
         'de': 'German',
         'it': 'Italian',
         'pt': 'Portuguese',
         'kn': 'Kannada'
     }
+    
     language_name = language_names.get(language, language)
     
-    # Create examples string from chart data
+    # Create examples text
     examples_text = ""
     if examples:
-        examples_text = "\n".join([
-            f"- Error: '{ex.get('error', '')}' → Correction: '{ex.get('correction', '')}'" 
-            for ex in examples[:3]
-        ])
-    
-    difficulty_map = {
-        'high': 'Advanced',
-        'moderate': 'Intermediate', 
-        'low': 'Beginner'
-    }
-    difficulty = difficulty_map.get(severity, 'Intermediate')
+        examples_text = "\n".join([f"- Error: '{ex.get('error', '')}' → Correction: '{ex.get('correction', '')}'" for ex in examples[:3]])
     
     prompt = f"""
-    Create a highly focused {language_name} lesson for a {level} level learner targeting this specific problem:
-    
-    Issue: {insight_message}
-    Category: {category}
-    Severity: {severity}
-    
-    {f"Recent mistakes examples:{examples_text}" if examples_text else ""}
-    
-    Generate a lesson with:
-    1. Title (specific to this exact problem)
-    2. Difficulty level: {difficulty}
-    3. Clear learning objectives (focused only on this issue)
-    4. Lesson content explaining the specific rule/concept
-    5. Cultural context (if relevant)
-    6. Practice activity targeting this exact pattern
-    
-    Make it highly specific - don't cover multiple topics. Focus only on solving this one identified problem.
-    
-    Example format:
-    {{
-        "title": "Mastering Ser vs Estar with Emotions",
-        "difficulty": "Intermediate", 
-        "objectives": "Learn when to use ser vs estar specifically with emotional states and temporary conditions",
-        "content": "Detailed explanation of the specific rule...",
-        "cultural_element": "Cultural context about emotions in Spanish-speaking cultures",
-        "practice_activity": "Conversation scenarios specifically about feelings and states",
-        "targeted_weaknesses": ["{category}"]
-    }}
-    
-    Return only valid JSON.
-    """
-    
+Create a targeted {language_name} lesson for level {level} that addresses this specific learning need:
+
+**Issue Identified:** {insight_message}
+**Category:** {category}
+**Severity:** {severity}
+**Examples from user's mistakes:**
+{examples_text}
+
+Generate a lesson that directly targets this weakness with:
+
+1. **Title**: A clear, specific lesson title
+2. **Difficulty**: Choose from "Easy", "Medium", or "Challenging" 
+3. **Objectives**: What the student will learn/practice (be specific to the identified issue)
+4. **Content**: Key grammar/vocabulary points to cover (focus on the problem area)
+5. **Cultural Element**: A relevant cultural context for this language feature
+6. **Practice Activity**: A conversation scenario that will practice this specific skill
+
+Format as JSON:
+{{
+  "title": "...",
+  "difficulty": "...",
+  "objectives": "...",
+  "content": "...",
+  "cultural_element": "...",
+  "practice_activity": "..."
+}}
+
+Make this lesson directly address the user's specific weakness while being engaging and culturally relevant.
+"""
+
     try:
-        response = await client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
         
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content.strip()
         
-        # Clean up JSON response
-        if '```json' in content:
-            content = content.split('```json')[1].split('```')[0].strip()
-        elif '```' in content:
-            content = content.split('```')[1].split('```')[0].strip()
-        
-        lesson_data = json.loads(content)
-        
-        # Ensure required fields
-        lesson_data.setdefault('targeted_weaknesses', [category])
-        lesson_data.setdefault('difficulty', difficulty)
-        
-        return lesson_data
-        
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse lesson JSON: {e}")
-        # Return a fallback lesson
-        return {
-            "title": f"Practice {category.title()} Skills",
-            "difficulty": difficulty,
-            "objectives": f"Improve your {category} usage based on recent conversation patterns",
-            "content": f"This lesson focuses on {category} patterns identified in your conversations. {insight_message}",
-            "cultural_element": f"Cultural context for {category} usage in {language_name}",
-            "practice_activity": f"Guided conversation practice focusing on {category}",
-            "targeted_weaknesses": [category]
-        }
+        # Parse JSON response
+        import json
+        try:
+            lesson_data = json.loads(content)
+            return lesson_data
+        except json.JSONDecodeError:
+            # If not valid JSON, try to extract JSON from the content
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                lesson_data = json.loads(json_match.group())
+                return lesson_data
+            else:
+                raise ValueError("Could not parse lesson data as JSON")
+                
     except Exception as e:
-        logging.error(f"Error generating targeted lesson: {e}")
+        logging.error(f"Error generating targeted lesson with OpenAI: {e}")
         raise
+
+# User Interests API Endpoints
+
+class UserInterest(BaseModel):
+    parent_interest: str
+    child_interest: Optional[str] = None
+    context: str
+
+class SaveInterestsRequest(BaseModel):
+    interests: List[UserInterest]
+
+@app.get("/api/user_interests")
+async def get_user_interests(token: str = Query(...)):
+    """Get all interests for the authenticated user"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Get user interests from database
+        result = supabase.table('user_interests').select('*').eq('user_id', user_id).order('parent_interest, child_interest').execute()
+        
+        # Group interests by parent category
+        grouped_interests = {}
+        for interest in result.data:
+            parent = interest['parent_interest']
+            if parent not in grouped_interests:
+                grouped_interests[parent] = []
+            
+            if interest['child_interest']:
+                grouped_interests[parent].append({
+                    'child_interest': interest['child_interest'],
+                    'context': interest['context']
+                })
+        
+        return {
+            'interests': grouped_interests
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error fetching user interests: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch interests: {str(e)}")
+
+@app.post("/api/user_interests")
+async def save_user_interests(request: SaveInterestsRequest, token: str = Query(...)):
+    """Save user interests, replacing all existing interests"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Delete all existing interests for this user
+        supabase.table('user_interests').delete().eq('user_id', user_id).execute()
+        
+        # Insert new interests
+        interests_to_insert = []
+        for interest in request.interests:
+            interests_to_insert.append({
+                'user_id': user_id,
+                'parent_interest': interest.parent_interest,
+                'child_interest': interest.child_interest,
+                'context': interest.context,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+        
+        if interests_to_insert:
+            result = supabase.table('user_interests').insert(interests_to_insert).execute()
+            
+        return {
+            'message': f'Successfully saved {len(interests_to_insert)} interests',
+            'count': len(interests_to_insert)
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error saving user interests: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save interests: {str(e)}")
+
+@app.delete("/api/user_interests/{parent_interest}")
+async def delete_parent_interest(parent_interest: str, token: str = Query(...)):
+    """Delete all interests under a parent category"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Delete all interests for this parent category
+        result = supabase.table('user_interests').delete().eq('user_id', user_id).eq('parent_interest', parent_interest).execute()
+        
+        return {
+            'message': f'Successfully deleted all interests under {parent_interest}',
+            'deleted_count': len(result.data) if result.data else 0
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error deleting parent interest: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete interest: {str(e)}")
+
+@app.delete("/api/user_interests/{parent_interest}/{child_interest}")
+async def delete_child_interest(parent_interest: str, child_interest: str, token: str = Query(...)):
+    """Delete a specific child interest"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Delete the specific child interest
+        result = supabase.table('user_interests').delete().eq('user_id', user_id).eq('parent_interest', parent_interest).eq('child_interest', child_interest).execute()
+        
+        return {
+            'message': f'Successfully deleted {child_interest} from {parent_interest}',
+            'deleted_count': len(result.data) if result.data else 0
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error deleting child interest: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete interest: {str(e)}")
 
 
 if __name__ == "__main__":
