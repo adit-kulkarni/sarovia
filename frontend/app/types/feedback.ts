@@ -30,6 +30,7 @@ export interface ChatBubbleProps {
   message: Message;
   hasFeedback: boolean;
   onFeedbackClick: () => void;
+  language?: string;
 }
 
 export const mistakeCategoryEmojis: Record<string, string> = {

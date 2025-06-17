@@ -1180,6 +1180,7 @@ function ChatComponent() {
                   message={message}
                   hasFeedback={message.id ? !!messageFeedbacks[message.id] : false}
                   onFeedbackClick={() => message.id && handleFeedbackClick(message.id)}
+                  language={selectedLanguage}
                 />
               </div>
             ))}
