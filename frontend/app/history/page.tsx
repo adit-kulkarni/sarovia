@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useUser } from '../hooks/useUser';
+import LessonSummaryModal from '../components/LessonSummaryModal';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -68,6 +69,12 @@ const HistoryPage = () => {
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const user = useUser();
+
+  // Report card modal state
+  const [showReportCardModal, setShowReportCardModal] = useState(false);
+  const [reportCardData, setReportCardData] = useState<any>(null);
+  const [loadingReportCard, setLoadingReportCard] = useState(false);
+  const [reportCardError, setReportCardError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchConversations = async () => {
@@ -182,6 +189,54 @@ const HistoryPage = () => {
       case 'minor': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
+  };
+
+  const handleViewReportCard = async (conversationId: string) => {
+    if (!token) {
+      setReportCardError('No authentication token found');
+      return;
+    }
+
+    setLoadingReportCard(true);
+    setReportCardError(null);
+
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const encodedConversationId = encodeURIComponent(conversationId);
+      const encodedToken = encodeURIComponent(token);
+      const summaryUrl = `${API_BASE}/api/conversations/${encodedConversationId}/summary?token=${encodedToken}`;
+
+      console.log('[Report Card] Summary URL:', summaryUrl);
+
+      const response = await fetch(summaryUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to load report card: ${response.status}`);
+      }
+
+      const summaryData = await response.json();
+      console.log('[Report Card] Fetched summary:', summaryData);
+      
+      setReportCardData(summaryData);
+      setShowReportCardModal(true);
+    } catch (error) {
+      console.error('Error loading report card:', error);
+      setReportCardError(error instanceof Error ? error.message : 'Failed to load report card');
+    } finally {
+      setLoadingReportCard(false);
+    }
+  };
+
+  const handleCloseReportCard = () => {
+    setShowReportCardModal(false);
+    setReportCardData(null);
+    setReportCardError(null);
   };
 
   if (loading) {
@@ -310,12 +365,14 @@ const HistoryPage = () => {
               conversations.map((conversation) => (
                 <div
                   key={conversation.id}
-                  onClick={() => handleConversationClick(conversation.id)}
-                  className="block hover:bg-orange-50 transition rounded-lg p-2 cursor-pointer"
+                  className="block hover:bg-orange-50 transition rounded-lg p-2"
                 >
                   <div className="p-4">
                     <div className="flex items-center justify-between mb-4">
-                      <div>
+                      <div
+                        onClick={() => handleConversationClick(conversation.id)}
+                        className="cursor-pointer flex-1"
+                      >
                         <h3 className="text-lg font-medium text-orange-600">
                           {contextTitles[conversation.context] || conversation.context}
                         </h3>
@@ -323,19 +380,34 @@ const HistoryPage = () => {
                           {new Date(conversation.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-500">
-                          Level: {conversation.level}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          {languageNames[conversation.language] || conversation.language}
-                        </p>
-                        <p className="text-sm font-medium text-orange-600 mt-1">
-                          {conversation.messages.length} {conversation.messages.length === 1 ? 'message' : 'messages'}
-                        </p>
+                      <div className="text-right flex flex-col items-end">
+                        <div className="mb-2">
+                          <p className="text-sm text-gray-500">
+                            Level: {conversation.level}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            {languageNames[conversation.language] || conversation.language}
+                          </p>
+                          <p className="text-sm font-medium text-orange-600 mt-1">
+                            {conversation.messages.length} {conversation.messages.length === 1 ? 'message' : 'messages'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleViewReportCard(conversation.id);
+                          }}
+                          disabled={loadingReportCard}
+                          className="px-3 py-1.5 text-xs rounded-lg font-semibold shadow transition-colors bg-orange-300 hover:bg-orange-400 text-orange-800 disabled:opacity-50"
+                        >
+                          {loadingReportCard ? 'Loading...' : '📊 Report Card'}
+                        </button>
                       </div>
                     </div>
-                    <div className="mt-4">
+                    <div
+                      onClick={() => handleConversationClick(conversation.id)}
+                      className="mt-4 cursor-pointer"
+                    >
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-sm font-medium text-gray-700">Conversation Preview:</h4>
                         <span className="text-xs text-gray-500">
@@ -351,6 +423,32 @@ const HistoryPage = () => {
               ))
             )}
           </div>
+        </div>
+      )}
+
+      {/* Report Card Modal */}
+      <LessonSummaryModal
+        isOpen={showReportCardModal}
+        onClose={handleCloseReportCard}
+        onReturnToDashboard={() => {
+          handleCloseReportCard();
+          // Stay on history page - no redirect needed
+        }}
+        summaryData={reportCardData}
+        loading={loadingReportCard}
+        token={token}
+      />
+
+      {/* Report Card Error Display */}
+      {reportCardError && (
+        <div className="fixed bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
+          {reportCardError}
+          <button
+            onClick={() => setReportCardError(null)}
+            className="ml-2 text-white hover:text-gray-200"
+          >
+            ×
+          </button>
         </div>
       )}
     </div>

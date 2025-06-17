@@ -80,11 +80,12 @@ def calculate_verb_achievements(before_verbs: Dict, after_verbs: Dict, lesson_ti
     if new_verbs:
         achievements.append({
             "id": "new_verbs",
-            "title": f"New Verbs Mastered: {len(new_verbs)}",
+            "title": f"New Verbs Used: {len(new_verbs)}",
             "description": f"You successfully used {', '.join(list(new_verbs)[:3])}{'...' if len(new_verbs) > 3 else ''} for the first time!",
             "icon": "🆕",
             "type": "new",
-            "value": len(new_verbs)
+            "value": len(new_verbs),
+            "verbs": list(new_verbs)  # Include the full list of verbs
         })
     
     # Track improved verb forms (existing verbs with new tenses/persons)
@@ -120,7 +121,8 @@ def calculate_verb_achievements(before_verbs: Dict, after_verbs: Dict, lesson_ti
             "description": f"You mastered new forms of {improved_verbs[0]['verb']} and {len(improved_verbs)-1} other verbs!" if len(improved_verbs) > 1 else f"You mastered new forms of {improved_verbs[0]['verb']}!",
             "icon": "📈",
             "type": "improved",
-            "value": total_new_forms
+            "value": total_new_forms,
+            "improved_verbs": improved_verbs  # Include the full improved verbs data
         })
     
     # Track verb diversity milestone

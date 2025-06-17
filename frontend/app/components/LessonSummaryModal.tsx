@@ -11,6 +11,12 @@ interface Achievement {
   icon: string;
   type: 'new' | 'improved' | 'milestone';
   value?: string | number;
+  verbs?: string[];  // List of verbs for verb-related achievements
+  improved_verbs?: Array<{  // List of improved verbs with their new forms
+    verb: string;
+    new_forms: number;
+    forms: string[];
+  }>;
 }
 
 interface MistakeSummary {
@@ -78,10 +84,11 @@ export default function LessonSummaryModal({
   loading = false,
   token
 }: LessonSummaryModalProps) {
-  const [currentView, setCurrentView] = useState<'achievements' | 'mistakes' | 'conversation'>('achievements');
+  const [currentView, setCurrentView] = useState<'achievements' | 'mistakes' | 'conversation' | 'verb-details' | 'improved-verbs'>('achievements');
   const [conversationData, setConversationData] = useState<ConversationMessage[]>([]);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [conversationError, setConversationError] = useState<string | null>(null);
+  const [selectedVerbAchievement, setSelectedVerbAchievement] = useState<Achievement | null>(null);
 
   // Clear conversation data when conversationId changes
   useEffect(() => {
@@ -94,6 +101,8 @@ export default function LessonSummaryModal({
     if (!isOpen) {
       setConversationData([]);
       setConversationError(null);
+      setCurrentView('achievements'); // Reset to achievements view
+      setSelectedVerbAchievement(null); // Clear selected verb achievement
     }
   }, [isOpen]);
 
@@ -168,6 +177,21 @@ export default function LessonSummaryModal({
       case 'minor': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
+  };
+
+  const handleVerbAchievementClick = (achievement: Achievement) => {
+    if (achievement.verbs && achievement.verbs.length > 0) {
+      setSelectedVerbAchievement(achievement);
+      setCurrentView('verb-details');
+    } else if (achievement.improved_verbs && achievement.improved_verbs.length > 0) {
+      setSelectedVerbAchievement(achievement);
+      setCurrentView('improved-verbs');
+    }
+  };
+
+  const backToAchievements = () => {
+    setCurrentView('achievements');
+    setSelectedVerbAchievement(null);
   };
 
   if (!summaryData && !loading) return null;
@@ -298,23 +322,33 @@ export default function LessonSummaryModal({
                               {summaryData.achievements.map((achievement) => (
                                 <div
                                   key={achievement.id}
-                                  className={`bg-white rounded-xl p-4 shadow-lg border-2 relative overflow-hidden ${
+                                  onClick={() => handleVerbAchievementClick(achievement)}
+                                  className={`bg-white rounded-xl p-4 shadow-lg border-2 relative overflow-hidden transition-all ${
                                     achievement.type === 'new' 
                                       ? 'border-yellow-300 bg-gradient-to-r from-yellow-50 to-orange-50' 
                                       : achievement.type === 'improved'
                                       ? 'border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50'
                                       : 'border-purple-300 bg-gradient-to-r from-purple-50 to-pink-50'
+                                  } ${
+                                    ((achievement.verbs && achievement.verbs.length > 0) || 
+                                     (achievement.improved_verbs && achievement.improved_verbs.length > 0))
+                                      ? 'cursor-pointer hover:scale-105 hover:shadow-xl' 
+                                      : ''
                                   }`}
                                 >
-                                  {achievement.type === 'new' && (
-                                    <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                                      NEW!
-                                    </div>
-                                  )}
+
                                   <div className="flex items-start space-x-3">
                                     <div className="text-3xl">{achievement.icon}</div>
                                     <div className="flex-1">
-                                      <h4 className="font-bold text-gray-800">{achievement.title}</h4>
+                                      <h4 className="font-bold text-gray-800 flex items-center">
+                                        {achievement.title}
+                                        {((achievement.verbs && achievement.verbs.length > 0) || 
+                                          (achievement.improved_verbs && achievement.improved_verbs.length > 0)) && (
+                                          <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">
+                                            Click for details
+                                          </span>
+                                        )}
+                                      </h4>
                                       <p className="text-sm text-gray-600 mb-1">{achievement.description}</p>
                                       {achievement.value && (
                                         <div className="text-lg font-semibold text-orange-600">
@@ -378,6 +412,93 @@ export default function LessonSummaryModal({
                               <p className="font-semibold">Perfect lesson! No corrections needed.</p>
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {currentView === 'verb-details' && selectedVerbAchievement && (
+                        <div>
+                          <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                              <span className="text-2xl mr-2">{selectedVerbAchievement.icon}</span>
+                              {selectedVerbAchievement.title}
+                            </h3>
+                            <button
+                              onClick={backToAchievements}
+                              className="text-gray-500 hover:text-gray-700 px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50 text-sm"
+                            >
+                              ← Back to Report Card
+                            </button>
+                          </div>
+                          
+                          <div className="bg-white rounded-xl border-2 border-gray-200 p-4">
+                            <p className="text-sm text-gray-600 mb-4">{selectedVerbAchievement.description}</p>
+                            <div className="space-y-3">
+                              <h4 className="font-semibold text-gray-800 mb-3">All verbs you used for the first time:</h4>
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-80 overflow-y-auto">
+                                {selectedVerbAchievement.verbs?.map((verb, index) => (
+                                  <div
+                                    key={index}
+                                    className="bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-200 rounded-lg px-3 py-2 text-center hover:shadow-md transition-shadow"
+                                  >
+                                    <span className="font-medium text-orange-800">{verb}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-4 text-center">
+                                <p className="text-sm text-gray-500">
+                                  🎉 You successfully used <strong>{selectedVerbAchievement.verbs?.length}</strong> new verbs in this conversation!
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {currentView === 'improved-verbs' && selectedVerbAchievement && (
+                        <div>
+                          <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                              <span className="text-2xl mr-2">{selectedVerbAchievement.icon}</span>
+                              {selectedVerbAchievement.title}
+                            </h3>
+                            <button
+                              onClick={backToAchievements}
+                              className="text-gray-500 hover:text-gray-700 px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50 text-sm"
+                            >
+                              ← Back to Report Card
+                            </button>
+                          </div>
+                          
+                          <div className="bg-white rounded-xl border-2 border-gray-200 p-4">
+                            <p className="text-sm text-gray-600 mb-4">{selectedVerbAchievement.description}</p>
+                            <div className="space-y-4">
+                              <h4 className="font-semibold text-gray-800 mb-3">Verbs with new forms mastered:</h4>
+                              <div className="space-y-3 max-h-80 overflow-y-auto">
+                                {selectedVerbAchievement.improved_verbs?.map((improvedVerb, index) => (
+                                  <div
+                                    key={index}
+                                    className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4"
+                                  >
+                                    <div className="flex items-center justify-between mb-2">
+                                      <h5 className="font-bold text-blue-800 text-lg">{improvedVerb.verb}</h5>
+                                      <span className="bg-blue-100 text-blue-600 px-2 py-1 rounded-full text-xs font-semibold">
+                                        +{improvedVerb.new_forms} new form{improvedVerb.new_forms !== 1 ? 's' : ''}
+                                      </span>
+                                    </div>
+                                    <div className="text-sm text-gray-600">
+                                      <span className="font-medium">New forms practiced: </span>
+                                      <span className="italic">{improvedVerb.forms.join(', ')}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-4 text-center">
+                                <p className="text-sm text-gray-500">
+                                  📈 You expanded your knowledge of <strong>{selectedVerbAchievement.improved_verbs?.length}</strong> verbs with <strong>{selectedVerbAchievement.value}</strong> new forms!
+                                </p>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       )}
 
@@ -501,6 +622,8 @@ export default function LessonSummaryModal({
           </div>
         </div>
       </Dialog>
+
+
     </Transition>
   );
 } 

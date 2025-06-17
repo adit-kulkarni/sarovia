@@ -5246,15 +5246,7 @@ async def get_conversation_summary(conversation_id: str, token: str = Query(...)
                 "value": total_turns
             })
         
-        if total_words >= 50:
-            achievements.append({
-                "id": "word_count",
-                "title": f"Vocabulary Practice",
-                "description": f"You used approximately {total_words} words in this conversation.",
-                "icon": "📝",
-                "type": "vocabulary",
-                "value": total_words
-            })
+
         
         # Create summary data structure - match lesson summary format exactly
         summary_data = {
