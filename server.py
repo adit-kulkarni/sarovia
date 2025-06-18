@@ -5801,6 +5801,36 @@ async def delete_child_interest(parent_interest: str, child_interest: str, token
         logging.error(f"Error deleting child interest: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete interest: {str(e)}")
 
+@app.delete("/api/user_interests")
+async def clear_all_user_interests(token: str = Query(...)):
+    """Delete all user interests and personalized contexts"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Delete all user interests
+        interests_result = supabase.table('user_interests').delete().eq('user_id', user_id).execute()
+        
+        # Delete all personalized contexts
+        contexts_result = supabase.table('personalized_contexts').delete().eq('user_id', user_id).execute()
+        
+        logging.info(f"Cleared all interests for user {user_id}")
+        
+        return {
+            'success': True,
+            'message': 'All interests and personalized contexts have been cleared successfully.',
+            'deleted_interests': len(interests_result.data) if interests_result.data else 0,
+            'deleted_contexts': len(contexts_result.data) if contexts_result.data else 0
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error clearing all interests: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear interests: {str(e)}")
+
 # Personalized Contexts API Endpoints
 
 class PersonalizedContext(BaseModel):
@@ -5861,13 +5891,33 @@ async def generate_personalized_contexts(request: GenerateContextsRequest, token
         if not interests_result.data:
             raise HTTPException(status_code=400, detail="No user interests found. Please set your interests first.")
         
-        # Format interests for prompt
-        interests_text = []
+        # Format interests for prompt - group by parent category to make relationships clear
+        interests_by_parent = {}
         for interest in interests_result.data:
+            parent = interest['parent_interest']
+            if parent not in interests_by_parent:
+                interests_by_parent[parent] = {'parent_context': None, 'children': []}
+            
             if interest['child_interest']:
-                interests_text.append(f"- {interest['parent_interest']}: {interest['child_interest']} ({interest['context']})")
+                interests_by_parent[parent]['children'].append({
+                    'child': interest['child_interest'],
+                    'context': interest['context']
+                })
             else:
-                interests_text.append(f"- {interest['parent_interest']} ({interest['context']})")
+                interests_by_parent[parent]['parent_context'] = interest['context']
+        
+        # Format for clear parent-child relationships
+        interests_text = []
+        for parent, data in interests_by_parent.items():
+            if data['parent_context']:
+                interests_text.append(f"**{parent}** (general interest: {data['parent_context']})")
+            else:
+                interests_text.append(f"**{parent}**:")
+            
+            for child_data in data['children']:
+                interests_text.append(f"  - {parent} → {child_data['child']} ({child_data['context']})")
+            
+            interests_text.append("")  # Add blank line between categories
         
         interests_formatted = "\n".join(interests_text)
         
@@ -5941,10 +5991,24 @@ Based on the following user interests, generate {count} engaging conversation co
 User Interests:
 {interests_text}{existing_context_text}
 
+CRITICAL RULES FOR INTEREST COMBINATIONS:
+1. Child interests (like "South East Asia", "Italian", etc.) should ONLY be combined with their specific parent category
+2. DO NOT mix child interests from one category with parent categories they don't belong to
+3. CORRECT EXAMPLES:
+   - "Travel → South East Asia" generates travel contexts about Southeast Asia
+   - "Cooking & Food → Italian" generates cooking contexts about Italian cuisine
+   - "Sports & Fitness → Football" generates sports contexts about football
+4. INCORRECT EXAMPLES (DO NOT DO):
+   - "Travel → South East Asia" generating business contexts about Southeast Asia
+   - "Cooking & Food → Italian" generating travel contexts about Italy
+   - Mixing "South East Asia" with unrelated categories like "Technology" or "Business"
+5. Each context should focus on ONE coherent interest combination, not multiple unrelated interests
+6. Respect the arrow (→) relationships shown in the user interests - they indicate which child belongs to which parent
+
 For each context, create a unique conversation scenario that incorporates their interests. Each context should include:
 
-1. **id_suffix**: A short, descriptive identifier (e.g., "travel_japan", "cooking_italian")
-2. **title**: An engaging title for the context card (e.g., "Planning Your Trip to Tokyo")
+1. **id_suffix**: A short, descriptive identifier (e.g., "travel_southeast_asia", "cooking_italian")
+2. **title**: An engaging title for the context card (e.g., "Planning Your Trip to Southeast Asia")
 3. **description**: A brief description of what the conversation will involve
 4. **icon**: A single emoji that represents the context
 5. **context_instructions**: Detailed roleplay instructions for the AI (similar to restaurant/market contexts)
@@ -5971,7 +6035,7 @@ Format as JSON object with an "contexts" array:
   ]
 }}
 
-Make each context unique, engaging, and directly relevant to their specific interests. Focus on creating scenarios that would naturally lead to rich conversations and language practice.
+Make each context unique, engaging, and directly relevant to their specific interests. Ensure each context stays within the logical boundaries of the interest categories - don't mix unrelated interests just because they share geographic or thematic elements.
 """
 
     try:
@@ -6068,13 +6132,33 @@ async def generate_contexts_for_new_interests(user_id: str):
             context_generation_status[user_id] = False
             return
         
-        # Format interests for prompt
-        interests_text = []
+        # Format interests for prompt - group by parent category to make relationships clear
+        interests_by_parent = {}
         for interest in interests_result.data:
+            parent = interest['parent_interest']
+            if parent not in interests_by_parent:
+                interests_by_parent[parent] = {'parent_context': None, 'children': []}
+            
             if interest['child_interest']:
-                interests_text.append(f"- {interest['parent_interest']}: {interest['child_interest']} ({interest['context']})")
+                interests_by_parent[parent]['children'].append({
+                    'child': interest['child_interest'],
+                    'context': interest['context']
+                })
             else:
-                interests_text.append(f"- {interest['parent_interest']} ({interest['context']})")
+                interests_by_parent[parent]['parent_context'] = interest['context']
+        
+        # Format for clear parent-child relationships
+        interests_text = []
+        for parent, data in interests_by_parent.items():
+            if data['parent_context']:
+                interests_text.append(f"**{parent}** (general interest: {data['parent_context']})")
+            else:
+                interests_text.append(f"**{parent}**:")
+            
+            for child_data in data['children']:
+                interests_text.append(f"  - {parent} → {child_data['child']} ({child_data['context']})")
+            
+            interests_text.append("")  # Add blank line between categories
         
         interests_formatted = "\n".join(interests_text)
         logging.info(f"[BACKGROUND] Formatted interests:\n{interests_formatted}")

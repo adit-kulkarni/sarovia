@@ -17,6 +17,8 @@ const ProfilePage = () => {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const openOverlay = (interest: string) => {
     setOverlayInterest(interest);
@@ -416,6 +418,38 @@ const ProfilePage = () => {
     }
   };
 
+  const clearAllInterests = async () => {
+    if (!token) return;
+
+    setClearing(true);
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      
+      // Use the new clear all endpoint
+      const response = await fetch(`${API_BASE}/api/user_interests?token=${token}`, {
+        method: 'DELETE'
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to clear interests: ${errorText}`);
+      }
+
+      const result = await response.json();
+
+      // Clear local state
+      setSelectedInterests([]);
+      setShowClearModal(false);
+      
+      alert(`All interests cleared successfully! Removed ${result.deleted_interests} interests and ${result.deleted_contexts} personalized contexts.`);
+    } catch (error) {
+      console.error('Error clearing interests:', error);
+      alert('Failed to clear interests. Please try again.');
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const isParentSelected = (category: string) => {
     return selectedInterests.some(
       interest => interest.parent_interest === category && interest.child_interest === null
@@ -472,13 +506,22 @@ const ProfilePage = () => {
         <div className="mb-8 bg-white rounded-lg shadow-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-semibold text-gray-800">Your Selected Interests</h2>
-            <button
-              onClick={saveInterests}
-              disabled={saving}
-              className="px-4 py-1.5 text-sm bg-transparent border border-orange-300 text-gray-700 rounded-md hover:bg-orange-50 hover:border-orange-400 transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Interests'}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowClearModal(true)}
+                disabled={saving || clearing}
+                className="px-3 py-1.5 text-sm bg-transparent border border-red-300 text-red-600 rounded-md hover:bg-red-50 hover:border-red-400 transition-colors disabled:opacity-50"
+              >
+                Clear All
+              </button>
+              <button
+                onClick={saveInterests}
+                disabled={saving}
+                className="px-4 py-1.5 text-sm bg-transparent border border-orange-300 text-gray-700 rounded-md hover:bg-orange-50 hover:border-orange-400 transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save Interests'}
+              </button>
+            </div>
             </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -645,6 +688,71 @@ const ProfilePage = () => {
         </div>
       </div>
 
+      {/* Clear All Interests Confirmation Modal */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black bg-opacity-50"
+            onClick={() => !clearing && setShowClearModal(false)}
+          ></div>
+          
+          {/* Modal */}
+          <div className="relative bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 transform transition-all duration-200 scale-100">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">⚠️</span>
+                <h3 className="text-lg font-semibold text-gray-800">Clear All Interests</h3>
+              </div>
+              {!clearing && (
+                <button
+                  onClick={() => setShowClearModal(false)}
+                  className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            
+            {/* Content */}
+            <div className="mb-6">
+              <p className="text-gray-600 mb-3">
+                Are you sure you want to clear all your interests? This will:
+              </p>
+              <ul className="text-sm text-gray-600 list-disc list-inside space-y-1 mb-4">
+                <li>Remove all your selected interests</li>
+                <li>Delete all your personalized conversation contexts</li>
+                <li>Reset your profile to the default state</li>
+              </ul>
+              <p className="text-sm text-red-600 font-medium">
+                This action cannot be undone.
+              </p>
+            </div>
+            
+            {/* Buttons */}
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowClearModal(false)}
+                disabled={clearing}
+                className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={clearAllInterests}
+                disabled={clearing}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {clearing && (
+                  <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
+                )}
+                {clearing ? 'Clearing...' : 'Delete All'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
     </div>
   );
