@@ -404,7 +404,7 @@ const ProfilePage = () => {
       });
 
       if (response.ok) {
-        alert('Interests saved successfully!');
+        alert('Interests saved successfully! Your personalized conversation contexts are being generated. Check the "Start Conversation" modal in a few moments to see them.');
       } else {
         throw new Error('Failed to save interests');
       }
@@ -475,7 +475,7 @@ const ProfilePage = () => {
             <button
               onClick={saveInterests}
               disabled={saving}
-              className="px-6 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50"
+              className="px-4 py-1.5 text-sm bg-transparent border border-orange-300 text-gray-700 rounded-md hover:bg-orange-50 hover:border-orange-400 transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Interests'}
             </button>

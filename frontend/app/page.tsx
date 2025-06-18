@@ -37,6 +37,14 @@ interface ContextCard {
   icon: string;
 }
 
+interface PersonalizedContext {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  interest_tags: string[];
+}
+
 interface Curriculum {
   id: string;
   language: string;
@@ -917,6 +925,10 @@ const Dashboard = () => {
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [showContextModal, setShowContextModal] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
+  const [personalizedContexts, setPersonalizedContexts] = useState<PersonalizedContext[]>([]);
+  const [personalizedContextsLoading, setPersonalizedContextsLoading] = useState(false);
+  const [userHasInterests, setUserHasInterests] = useState<boolean | null>(null);
+  const [contextGenerationInProgress, setContextGenerationInProgress] = useState(false);
   const [lessonProgress, setLessonProgress] = useState<Record<string, any>>({});
   const [showLessonSummary, setShowLessonSummary] = useState(false);
   const [lessonSummaryData, setLessonSummaryData] = useState<LessonSummaryData | null>(null);
@@ -1094,6 +1106,85 @@ const Dashboard = () => {
 
   const handleStartConversation = () => {
     setShowContextModal(true);
+    checkUserInterestsAndLoadContexts();
+  };
+
+  const checkUserInterestsAndLoadContexts = async () => {
+    if (!token) {
+      console.log('No token available for checking interests');
+      return;
+    }
+    
+    try {
+      setPersonalizedContextsLoading(true);
+      console.log('🔍 Checking user interests...');
+      
+      // Check if user has interests
+      const interestsResponse = await fetch(`${API_BASE}/api/user_interests?token=${token}`);
+      console.log('📊 Interests response status:', interestsResponse.status);
+      
+      if (interestsResponse.ok) {
+        const interestsData = await interestsResponse.json();
+        console.log('📊 Interests data:', interestsData);
+        
+        const hasInterests = Object.keys(interestsData.interests || {}).length > 0;
+        console.log('📊 User has interests:', hasInterests);
+        setUserHasInterests(hasInterests);
+        
+        if (hasInterests) {
+          console.log('🎯 Loading personalized contexts...');
+          // Load personalized contexts
+          const contextsResponse = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
+          console.log('🎯 Contexts response status:', contextsResponse.status);
+          
+          if (contextsResponse.ok) {
+            const contextsData = await contextsResponse.json();
+            console.log('🎯 Contexts data:', contextsData);
+            setPersonalizedContexts(contextsData.contexts || []);
+          } else {
+            console.error('🎯 Failed to load contexts:', await contextsResponse.text());
+          }
+        }
+      } else {
+        console.error('📊 Failed to load interests:', await interestsResponse.text());
+        setUserHasInterests(false);
+      }
+    } catch (error) {
+      console.error('💥 Error checking user interests:', error);
+      setUserHasInterests(false);
+    } finally {
+      setPersonalizedContextsLoading(false);
+      console.log('✅ Finished checking interests and contexts');
+    }
+  };
+
+  const generateMoreContexts = async () => {
+    if (!token) return;
+    
+    try {
+      setPersonalizedContextsLoading(true);
+      const response = await fetch(`${API_BASE}/api/personalized_contexts/generate?token=${token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ count: 6 })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setPersonalizedContexts(prev => [...prev, ...data.contexts]);
+      } else {
+        const errorData = await response.json();
+        console.error('Failed to generate more contexts:', errorData);
+        alert(errorData.detail || 'Failed to generate more contexts');
+      }
+    } catch (error) {
+      console.error('Error generating more contexts:', error);
+      alert('Failed to generate more contexts');
+    } finally {
+      setPersonalizedContextsLoading(false);
+    }
   };
 
   const handleContextSelect = async (contextId: string) => {
@@ -1225,6 +1316,40 @@ const Dashboard = () => {
     
     fetchFeedback();
   }, [selectedCurriculum?.id]); // Add selectedCurriculum as dependency
+
+  // Poll for context generation status
+  const checkContextGenerationStatus = async () => {
+    if (!token) return;
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/personalized_contexts/status?token=${token}`);
+      if (response.ok) {
+        const data = await response.json();
+        setContextGenerationInProgress(data.is_generating);
+        
+        // If generation was in progress but now complete, refresh contexts
+        if (contextGenerationInProgress && !data.is_generating) {
+          console.log('🎯 Context generation completed, refreshing...');
+          await checkUserInterestsAndLoadContexts();
+        }
+      }
+    } catch (error) {
+      console.error('Error checking context generation status:', error);
+    }
+  };
+
+  // Poll context generation status every 2 seconds when modal is open
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    
+    if (showContextModal && token) {
+      interval = setInterval(checkContextGenerationStatus, 2000);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [showContextModal, token, contextGenerationInProgress]);
 
   if (authLoading) {
     return (
@@ -1825,24 +1950,293 @@ const Dashboard = () => {
                 enter="ease-out duration-300" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100"
                 leave="ease-in duration-200" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-4xl transform overflow-hidden rounded-2xl bg-white p-6 sm:p-8 text-left align-middle shadow-xl transition-all mx-4">
+                <Dialog.Panel className="w-full max-w-5xl transform overflow-hidden rounded-2xl bg-white p-6 sm:p-8 text-left align-middle shadow-xl transition-all mx-4">
                   <Dialog.Title as="h3" className="text-2xl font-bold mb-6 text-orange-600 text-center">
                     Choose a Conversation Context
                   </Dialog.Title>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[70vh] overflow-y-auto">
-                    {contextCards.map(context => (
+                  
+                  {/* Check if user has no interests */}
+                  {userHasInterests === false && (
+                    <div className="text-center py-8 bg-orange-50 rounded-lg mb-6">
+                      <div className="text-4xl mb-4">🎯</div>
+                      <h4 className="text-lg font-semibold text-orange-700 mb-2">
+                        Get Personalized Conversation Topics!
+                      </h4>
+                      <p className="text-gray-600 mb-4">
+                        Visit your profile to set your interests and unlock personalized conversation scenarios.
+                      </p>
                       <button
-                        key={context.id}
-                        className="flex flex-col items-center justify-center rounded-xl border-2 p-4 sm:p-5 bg-orange-50 hover:bg-orange-100 border-orange-200 hover:border-orange-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-300 min-h-[140px]"
-                        onClick={() => handleContextSelect(context.id)}
-                        disabled={contextLoading}
+                        onClick={() => {
+                          setShowContextModal(false);
+                          router.push('/profile');
+                        }}
+                        className="px-6 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
                       >
-                        <span className="text-3xl mb-2">{context.icon}</span>
-                        <span className="font-bold text-base sm:text-lg mb-1 text-orange-700 text-center">{context.title}</span>
-                        <span className="text-xs sm:text-sm text-gray-600 text-center leading-tight">{context.description}</span>
+                        Set Your Interests
                       </button>
-                    ))}
-                  </div>
+                    </div>
+                  )}
+
+                  {/* Loading state for contexts being generated */}
+                  {userHasInterests === true && (personalizedContextsLoading || contextGenerationInProgress) && personalizedContexts.length === 0 && (
+                    <div className="flex gap-6">
+                      {/* Mini Sidebar - maintain structure */}
+                      <div className="w-32 flex-shrink-0">
+                        <div className="sticky top-0 space-y-2">
+                          <div className="w-full text-left px-3 py-2 rounded-lg bg-purple-50 border border-purple-200">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">✨</span>
+                              <div>
+                                <div className="font-medium text-sm text-purple-700">For You</div>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="w-full text-left px-3 py-2 rounded-lg bg-orange-50 border border-orange-200">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">🎭</span>
+                              <div>
+                                <div className="font-medium text-sm text-orange-700">Classic</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Loading Content Area */}
+                      <div className="flex-1">
+                        <div className="text-center py-8 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
+                          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-500 mx-auto mb-4"></div>
+                          <h4 className="text-lg font-semibold text-purple-700 mb-2">
+                            {contextGenerationInProgress ? 'Generating your personalized contexts...' : 'Loading your contexts...'}
+                          </h4>
+                          <p className="text-gray-600">
+                            {contextGenerationInProgress 
+                              ? 'Creating conversation scenarios based on your interests. This may take a moment.'
+                              : 'Fetching your personalized conversation scenarios.'
+                            }
+                          </p>
+                          {contextGenerationInProgress && (
+                            <p className="text-sm text-purple-600 mt-2">
+                              ✨ Using AI to craft scenarios just for you
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Main content with sidebar */}
+                  {userHasInterests !== false && !personalizedContextsLoading && !contextGenerationInProgress && (
+                    <div className="flex gap-6">
+                      {/* Mini Sidebar */}
+                      <div className="w-32 flex-shrink-0">
+                        <div className="sticky top-0 space-y-2">
+                          {userHasInterests === true && (personalizedContexts.length > 0 || !personalizedContextsLoading) && (
+                            <button
+                              onClick={() => {
+                                document.getElementById('for-you-section')?.scrollIntoView({ 
+                                  behavior: 'smooth', 
+                                  block: 'start' 
+                                });
+                              }}
+                              className="w-full text-left px-3 py-2 rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 hover:border-purple-300 transition-all duration-200 group"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm">✨</span>
+                                <div>
+                                  <div className="font-medium text-sm text-purple-700 group-hover:text-purple-800">For You</div>
+                                </div>
+                              </div>
+                            </button>
+                          )}
+                          
+                          <button
+                            onClick={() => {
+                              document.getElementById('classic-contexts-section')?.scrollIntoView({ 
+                                behavior: 'smooth', 
+                                block: 'start' 
+                              });
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-lg bg-orange-50 hover:bg-orange-100 border border-orange-200 hover:border-orange-300 transition-all duration-200 group"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">🎭</span>
+                              <div>
+                                <div className="font-medium text-sm text-orange-700 group-hover:text-orange-800">Classic</div>
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Content Area */}
+                      <div className="flex-1">
+                        {/* For You Section */}
+                        {userHasInterests === true && personalizedContexts.length > 0 && (
+                          <div id="for-you-section" className="mb-6 scroll-mt-4">
+                            <div className="flex items-center justify-between mb-4">
+                              <h4 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                                <span>✨</span> For You
+                              </h4>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={generateMoreContexts}
+                                  disabled={personalizedContextsLoading}
+                                  className="text-sm px-3 py-1 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded transition-colors disabled:opacity-50"
+                                >
+                                  {personalizedContextsLoading ? '...' : 'Load More'}
+                                </button>
+                                <button
+                                  onClick={checkUserInterestsAndLoadContexts}
+                                  disabled={personalizedContextsLoading}
+                                  className="text-sm px-2 py-1 text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded transition-colors disabled:opacity-50"
+                                  title="Refresh contexts based on current interests"
+                                >
+                                  🔄
+                                </button>
+                              </div>
+                            </div>
+                            <div className="max-h-80 overflow-y-auto">
+                              <div className="grid grid-cols-3 gap-3 mb-4">
+                                {personalizedContexts.slice(0, 6).map(context => (
+                                  <button
+                                    key={context.id}
+                                    className="flex flex-col items-center justify-center rounded-lg border-2 p-3 bg-gradient-to-br from-purple-50 to-pink-50 hover:from-purple-100 hover:to-pink-100 border-purple-200 hover:border-purple-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-purple-300 min-h-[120px]"
+                                    onClick={() => handleContextSelect(context.id)}
+                                    disabled={contextLoading}
+                                  >
+                                    <span className="text-2xl mb-1">{context.icon}</span>
+                                    <span className="font-bold text-sm mb-1 text-purple-700 text-center leading-tight">{context.title}</span>
+                                    <span className="text-xs text-gray-600 text-center leading-tight line-clamp-2">{context.description}</span>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                      {context.interest_tags.slice(0, 2).map((tag, index) => (
+                                        <span key={index} className="text-xs bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">
+                                          {tag}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                              
+                              {/* Additional contexts in scrollable area */}
+                              {personalizedContexts.length > 6 && (
+                                <div className="grid grid-cols-3 gap-3">
+                                  {personalizedContexts.slice(6).map(context => (
+                                    <button
+                                      key={context.id}
+                                      className="flex flex-col items-center justify-center rounded-lg border-2 p-3 bg-gradient-to-br from-purple-50 to-pink-50 hover:from-purple-100 hover:to-pink-100 border-purple-200 hover:border-purple-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-purple-300 min-h-[120px]"
+                                      onClick={() => handleContextSelect(context.id)}
+                                      disabled={contextLoading}
+                                    >
+                                      <span className="text-2xl mb-1">{context.icon}</span>
+                                      <span className="font-bold text-sm mb-1 text-purple-700 text-center leading-tight">{context.title}</span>
+                                      <span className="text-xs text-gray-600 text-center leading-tight line-clamp-2">{context.description}</span>
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {context.interest_tags.slice(0, 2).map((tag, index) => (
+                                          <span key={index} className="text-xs bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">
+                                            {tag}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Loading state for Load More */}
+                            {personalizedContextsLoading && (
+                              <div className="text-center py-6 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
+                                <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-purple-500 mx-auto mb-3"></div>
+                                <p className="text-sm text-purple-700 font-medium">
+                                  Generating more personalized contexts...
+                                </p>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  ✨ Creating new scenarios based on your interests
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Generate Contexts Button - when user has interests but no contexts */}
+                        {userHasInterests === true && personalizedContexts.length === 0 && !personalizedContextsLoading && (
+                          <div id="for-you-section" className="mb-6 scroll-mt-4">
+                            <div className="text-center py-8 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
+                              <div className="text-4xl mb-4">✨</div>
+                              <h4 className="text-lg font-semibold text-purple-700 mb-2">
+                                Generate Your Personalized Contexts
+                              </h4>
+                              <p className="text-gray-600 mb-4">
+                                Create conversation scenarios tailored to your interests.
+                              </p>
+                              <button
+                                onClick={generateMoreContexts}
+                                disabled={personalizedContextsLoading}
+                                className="px-6 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors disabled:opacity-50"
+                              >
+                                Generate Contexts
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Classic Contexts Section */}
+                        <div id="classic-contexts-section" className="scroll-mt-4">
+                          <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                            <span>🎭</span> Classic Contexts
+                          </h4>
+                          <div className="max-h-80 overflow-y-auto">
+                            <div className="grid grid-cols-3 gap-3">
+                              {contextCards.map(context => (
+                                <button
+                                  key={context.id}
+                                  className="flex flex-col items-center justify-center rounded-lg border-2 p-3 bg-orange-50 hover:bg-orange-100 border-orange-200 hover:border-orange-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-300 min-h-[120px]"
+                                  onClick={() => handleContextSelect(context.id)}
+                                  disabled={contextLoading}
+                                >
+                                  <span className="text-2xl mb-1">{context.icon}</span>
+                                  <span className="font-bold text-sm mb-1 text-orange-700 text-center leading-tight">{context.title}</span>
+                                  <span className="text-xs text-gray-600 text-center leading-tight line-clamp-2">{context.description}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show old layout for users with no interests */}
+                  {userHasInterests === false && (
+                    <div className="max-h-[70vh] overflow-y-auto">
+                      {/* Classic Contexts Section */}
+                      <div>
+                        <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                          <span>🎭</span> Classic Contexts
+                        </h4>
+                        <div className="max-h-[60vh] overflow-y-auto">
+                          <div className="grid grid-cols-3 gap-3">
+                            {contextCards.map(context => (
+                              <button
+                                key={context.id}
+                                className="flex flex-col items-center justify-center rounded-lg border-2 p-3 bg-orange-50 hover:bg-orange-100 border-orange-200 hover:border-orange-400 transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-300 min-h-[120px]"
+                                onClick={() => handleContextSelect(context.id)}
+                                disabled={contextLoading}
+                              >
+                                <span className="text-2xl mb-1">{context.icon}</span>
+                                <span className="font-bold text-sm mb-1 text-orange-700 text-center leading-tight">{context.title}</span>
+                                <span className="text-xs text-gray-600 text-center leading-tight line-clamp-2">{context.description}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {contextLoading && (
                     <div className="flex justify-center mt-6">
                       <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-orange-500"></div>

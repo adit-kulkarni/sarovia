@@ -681,7 +681,7 @@ def get_context_specific_instructions(context: str, language: str) -> str:
     }
     return context_guidelines.get(context, context_guidelines["restaurant"])
 
-def get_level_specific_instructions(level: str, context: str, language: str) -> str:
+def get_level_specific_instructions(level: str, context: str, language: str, user_id: str = None) -> str:
     """Generate level-specific instructions for the AI"""
     level_guidelines = {
         "A1": "CRITICAL: Use ONLY basic vocabulary (300-500 most common words). Speak in SHORT, SIMPLE sentences (5-8 words max). Use ONLY present tense. Speak VERY SLOWLY with clear pauses between sentences. Provide English translations frequently. Repeat key words. Avoid complex grammar entirely.",
@@ -711,7 +711,7 @@ def get_level_specific_instructions(level: str, context: str, language: str) -> 
         f"{level_guidelines.get(level, level_guidelines['A1'])}\n\n"
         f"⚠️ IMPORTANT: The student's level ({level}) determines how you should speak. Do NOT use vocabulary or grammar above their level. "
         f"If you're unsure about a word's difficulty, choose a simpler alternative.\n\n"
-        f"CONVERSATION CONTEXT:\n{get_context_specific_instructions(context, language)}"
+        f"CONVERSATION CONTEXT:\n{get_context_specific_instructions_extended(context, language, user_id)}"
     )
     return base_instructions
 
@@ -965,7 +965,7 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     logging.warning(f"[Handler {handler_id}] Duplicate OpenAI session.created event ignored.")
                 
                 # Now send session config and response.create to OpenAI (AFTER conversation is ready)
-                instructions_to_send = custom_instructions if custom_instructions else get_level_specific_instructions(level, context, language)
+                instructions_to_send = custom_instructions if custom_instructions else get_level_specific_instructions(level, context, language, user_id)
                 logging.info(f"[Handler {handler_id}] Sending session.update with instructions:\n{instructions_to_send}")
                 # Configure turn detection based on VAD settings
                 logging.info(f"[Handler {handler_id}] VAD settings received: {vad_settings}")
@@ -1569,11 +1569,11 @@ async def get_conversation_review(conversation_id: str, token: str = Query(...))
         logging.error(f"Error getting conversation review: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def generate_hint(level: str, context: str, language: str, conversation_history: list) -> str:
+async def generate_hint(level: str, context: str, language: str, conversation_history: list, user_id: str = None) -> str:
     """Generate a conversation hint using OpenAI's chat completions API"""
     try:
         # Get the conversation context and instructions
-        instructions = get_level_specific_instructions(level, context, language)
+        instructions = get_level_specific_instructions(level, context, language, user_id)
         
         # Format conversation history, handling empty or short conversations
         if not conversation_history:
@@ -1658,7 +1658,8 @@ async def get_hint(
             conversation.data[0]['level'],
             conversation.data[0]['context'],
             conversation.data[0]['language'],
-            messages.data
+            messages.data,
+            user_id
         )
         
         logging.debug(f"[get_hint] Generated hint: {hint}")
@@ -2096,7 +2097,7 @@ Speak in the language CEFR level defined by \"difficulty\". Your sentence length
         base_instructions += f"### Lesson: {lesson.get('title', '')}\n**Difficulty**: {lesson.get('difficulty', '')}  \n**Objectives**: {lesson.get('objectives', '')}  \n**Content**: {lesson.get('content', '')}  \n**Cultural Element**: {lesson.get('cultural_element', '')}  \n**Practice Activity**: {lesson.get('practice_activity', '')}\n"
         return JSONResponse({"instructions": base_instructions})
     # Otherwise, return default instructions
-    instructions = get_level_specific_instructions(conversation['level'], conversation['context'], conversation['language'])
+    instructions = get_level_specific_instructions(conversation['level'], conversation['context'], conversation['language'], user_id)
     return JSONResponse({"instructions": instructions})
 
 # Add new models for custom lesson generation
@@ -2356,7 +2357,7 @@ Keep all text concise and focused. Use {language} only for examples within the E
                 "Content-Type": "application/json"
             },
             json={
-                "model": "gpt-4-turbo-preview",
+                "model": "gpt-4o-mini",
                 "messages": [{"role": "system", "content": prompt}],
                 "temperature": 0.7,
                 "response_format": {"type": "json_object"}
@@ -5733,6 +5734,9 @@ async def save_user_interests(request: SaveInterestsRequest, token: str = Query(
         if interests_to_insert:
             result = supabase.table('user_interests').insert(interests_to_insert).execute()
             
+            # Trigger personalized context generation in the background
+            asyncio.create_task(generate_contexts_for_new_interests(user_id))
+            
         return {
             'message': f'Successfully saved {len(interests_to_insert)} interests',
             'count': len(interests_to_insert)
@@ -5755,6 +5759,9 @@ async def delete_parent_interest(parent_interest: str, token: str = Query(...)):
         
         # Delete all interests for this parent category
         result = supabase.table('user_interests').delete().eq('user_id', user_id).eq('parent_interest', parent_interest).execute()
+        
+        # Trigger personalized context regeneration in the background
+        asyncio.create_task(generate_contexts_for_new_interests(user_id))
         
         return {
             'message': f'Successfully deleted all interests under {parent_interest}',
@@ -5779,6 +5786,9 @@ async def delete_child_interest(parent_interest: str, child_interest: str, token
         # Delete the specific child interest
         result = supabase.table('user_interests').delete().eq('user_id', user_id).eq('parent_interest', parent_interest).eq('child_interest', child_interest).execute()
         
+        # Trigger personalized context regeneration in the background
+        asyncio.create_task(generate_contexts_for_new_interests(user_id))
+        
         return {
             'message': f'Successfully deleted {child_interest} from {parent_interest}',
             'deleted_count': len(result.data) if result.data else 0
@@ -5791,6 +5801,344 @@ async def delete_child_interest(parent_interest: str, child_interest: str, token
         logging.error(f"Error deleting child interest: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete interest: {str(e)}")
 
+# Personalized Contexts API Endpoints
+
+class PersonalizedContext(BaseModel):
+    id: str
+    title: str
+    description: str
+    icon: str
+    context_instructions: str
+    interest_tags: List[str]
+
+class GenerateContextsRequest(BaseModel):
+    count: int = 6  # Number of contexts to generate
+
+@app.get("/api/personalized_contexts")
+async def get_personalized_contexts(token: str = Query(...)):
+    """Get all personalized contexts for the authenticated user"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Get personalized contexts from database
+        result = supabase.table('personalized_contexts').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+        
+        contexts = []
+        for context in result.data:
+            contexts.append({
+                'id': context['id'],
+                'title': context['title'],
+                'description': context['description'],
+                'icon': context['icon'],
+                'interest_tags': context['interest_tags']
+            })
+        
+        return {
+            'contexts': contexts,
+            'count': len(contexts)
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error fetching personalized contexts: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch contexts: {str(e)}")
+
+@app.post("/api/personalized_contexts/generate")
+async def generate_personalized_contexts(request: GenerateContextsRequest, token: str = Query(...)):
+    """Generate new personalized contexts based on user interests"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Get user interests from database
+        interests_result = supabase.table('user_interests').select('*').eq('user_id', user_id).execute()
+        
+        if not interests_result.data:
+            raise HTTPException(status_code=400, detail="No user interests found. Please set your interests first.")
+        
+        # Format interests for prompt
+        interests_text = []
+        for interest in interests_result.data:
+            if interest['child_interest']:
+                interests_text.append(f"- {interest['parent_interest']}: {interest['child_interest']} ({interest['context']})")
+            else:
+                interests_text.append(f"- {interest['parent_interest']} ({interest['context']})")
+        
+        interests_formatted = "\n".join(interests_text)
+        
+        # Get existing contexts to avoid duplicates
+        existing_contexts_result = supabase.table('personalized_contexts').select('title, description').eq('user_id', user_id).execute()
+        existing_contexts = existing_contexts_result.data if existing_contexts_result.data else []
+        
+        # Generate contexts using OpenAI
+        generated_contexts = await generate_contexts_with_openai(interests_formatted, request.count, existing_contexts)
+        
+        # Save contexts to database
+        contexts_to_insert = []
+        import time
+        timestamp = int(time.time())
+        
+        for i, context in enumerate(generated_contexts):
+            # Add timestamp and index to ensure unique IDs for Load More functionality
+            context_id = f"user_{user_id[:8]}_{context['id_suffix']}_{timestamp}_{i}"
+            contexts_to_insert.append({
+                'id': context_id,
+                'user_id': user_id,
+                'title': context['title'],
+                'description': context['description'],
+                'icon': context['icon'],
+                'context_instructions': context['context_instructions'],
+                'interest_tags': context['interest_tags'],
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+        
+        if contexts_to_insert:
+            result = supabase.table('personalized_contexts').insert(contexts_to_insert).execute()
+            
+        return {
+            'message': f'Successfully generated {len(contexts_to_insert)} personalized contexts',
+            'contexts': [
+                {
+                    'id': ctx['id'],
+                    'title': ctx['title'],
+                    'description': ctx['description'],
+                    'icon': ctx['icon'],
+                    'interest_tags': ctx['interest_tags']
+                } for ctx in contexts_to_insert
+            ],
+            'count': len(contexts_to_insert)
+        }
+        
+    except HTTPException:
+        raise
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error generating personalized contexts: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate contexts: {str(e)}")
+
+async def generate_contexts_with_openai(interests_text: str, count: int, existing_contexts: List[dict] = None) -> List[dict]:
+    """Generate personalized conversation contexts using OpenAI"""
+    
+    # Format existing contexts for the prompt if provided
+    existing_context_text = ""
+    if existing_contexts:
+        existing_context_text = "\n\nEXISTING CONTEXTS TO AVOID DUPLICATING:\n"
+        for ctx in existing_contexts:
+            existing_context_text += f"- {ctx.get('title', 'N/A')}: {ctx.get('description', 'N/A')}\n"
+        existing_context_text += "\nPlease ensure new contexts are significantly different from these existing ones in theme, setting, and approach.\n"
+    
+    prompt = f"""
+Based on the following user interests, generate {count} engaging conversation contexts for language learning practice:
+
+User Interests:
+{interests_text}{existing_context_text}
+
+For each context, create a unique conversation scenario that incorporates their interests. Each context should include:
+
+1. **id_suffix**: A short, descriptive identifier (e.g., "travel_japan", "cooking_italian")
+2. **title**: An engaging title for the context card (e.g., "Planning Your Trip to Tokyo")
+3. **description**: A brief description of what the conversation will involve
+4. **icon**: A single emoji that represents the context
+5. **context_instructions**: Detailed roleplay instructions for the AI (similar to restaurant/market contexts)
+6. **interest_tags**: Array of relevant interest tags
+
+The context_instructions should be detailed roleplay guidelines that:
+- Create an immersive scenario related to their interests
+- Provide specific character backgrounds and settings
+- Include variation instructions for different conversations
+- Encourage natural language practice while staying in character
+- Provide examples of conversation starters and interactions
+
+Format as JSON object with an "contexts" array:
+{{
+  "contexts": [
+    {{
+      "id_suffix": "...",
+      "title": "...",
+      "description": "...",
+      "icon": "...",
+      "context_instructions": "...",
+      "interest_tags": ["...", "..."]
+    }}
+  ]
+}}
+
+Make each context unique, engaging, and directly relevant to their specific interests. Focus on creating scenarios that would naturally lead to rich conversations and language practice.
+"""
+
+    try:
+        logging.info(f"[OPENAI] Generating {count} contexts for interests:\n{interests_text}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.8,
+                    "response_format": {"type": "json_object"}
+                }
+            ) as response:
+                logging.info(f"[OPENAI] Response status: {response.status}")
+                
+                if response.status != 200:
+                    response_text = await response.text()
+                    logging.error(f"[OPENAI] API error: {response_text}")
+                    raise Exception(f"OpenAI API error: {response_text}")
+                
+                response_data = await response.json()
+                result = response_data["choices"][0]["message"]["content"]
+                logging.info(f"[OPENAI] Raw response: {result[:200]}...")
+                
+                # Parse JSON response
+                import json
+                contexts_data = json.loads(result)
+                logging.info(f"[OPENAI] Parsed data type: {type(contexts_data)}")
+                
+                # If the response is wrapped in an object with a key, extract the array
+                if isinstance(contexts_data, dict):
+                    if "contexts" in contexts_data:
+                        contexts_data = contexts_data["contexts"]
+                    elif len(contexts_data) == 1:
+                        key = list(contexts_data.keys())[0]
+                        if isinstance(contexts_data[key], list):
+                            contexts_data = contexts_data[key]
+                
+                if not isinstance(contexts_data, list):
+                    logging.error(f"[OPENAI] Expected array, got: {type(contexts_data)}")
+                    raise Exception(f"Expected array of contexts from OpenAI, got {type(contexts_data)}")
+                    
+                logging.info(f"[OPENAI] Successfully generated {len(contexts_data)} contexts")
+                return contexts_data
+                
+    except Exception as e:
+        logging.error(f"[OPENAI] Error generating contexts: {e}", exc_info=True)
+        raise Exception(f"Failed to generate contexts: {str(e)}")
+
+# Update the context instructions function to handle personalized contexts
+def get_context_specific_instructions_extended(context: str, language: str, user_id: str = None) -> str:
+    """Generate context-specific instructions for the AI, including personalized contexts"""
+    
+    # First check if it's a personalized context
+    if context.startswith('user_') and user_id:
+        try:
+            result = supabase.table('personalized_contexts').select('context_instructions').eq('id', context).eq('user_id', user_id).execute()
+            if result.data:
+                return result.data[0]['context_instructions']
+            else:
+                logging.warning(f"Personalized context {context} not found for user {user_id}, falling back to default")
+        except Exception as e:
+            logging.error(f"Error fetching personalized context instructions: {e}")
+    
+    # Fall back to original context instructions
+    return get_context_specific_instructions(context, language)
+
+async def generate_contexts_for_new_interests(user_id: str):
+    """Background task to generate personalized contexts when user saves interests"""
+    try:
+        # Mark generation as in progress
+        context_generation_status[user_id] = True
+        logging.info(f"[BACKGROUND] Starting context generation for user {user_id}")
+        
+        # Clear existing personalized contexts first to ensure fresh content
+        logging.info(f"[BACKGROUND] Clearing existing contexts for user {user_id}")
+        delete_result = supabase.table('personalized_contexts').delete().eq('user_id', user_id).execute()
+        deleted_count = len(delete_result.data) if delete_result.data else 0
+        logging.info(f"[BACKGROUND] Deleted {deleted_count} existing contexts")
+        
+        # Get user interests
+        interests_result = supabase.table('user_interests').select('*').eq('user_id', user_id).execute()
+        logging.info(f"[BACKGROUND] Found {len(interests_result.data)} interests for user {user_id}")
+        
+        if not interests_result.data:
+            logging.warning(f"[BACKGROUND] No interests found for user {user_id}, contexts cleared but none generated")
+            # Mark generation as complete
+            context_generation_status[user_id] = False
+            return
+        
+        # Format interests for prompt
+        interests_text = []
+        for interest in interests_result.data:
+            if interest['child_interest']:
+                interests_text.append(f"- {interest['parent_interest']}: {interest['child_interest']} ({interest['context']})")
+            else:
+                interests_text.append(f"- {interest['parent_interest']} ({interest['context']})")
+        
+        interests_formatted = "\n".join(interests_text)
+        logging.info(f"[BACKGROUND] Formatted interests:\n{interests_formatted}")
+        
+        # Generate 6 initial contexts
+        logging.info(f"[BACKGROUND] Calling OpenAI to generate contexts...")
+        generated_contexts = await generate_contexts_with_openai(interests_formatted, 6)
+        logging.info(f"[BACKGROUND] OpenAI returned {len(generated_contexts)} contexts")
+        
+        # Save contexts to database
+        contexts_to_insert = []
+        for context in generated_contexts:
+            context_id = f"user_{user_id[:8]}_{context['id_suffix']}"
+            contexts_to_insert.append({
+                'id': context_id,
+                'user_id': user_id,
+                'title': context['title'],
+                'description': context['description'],
+                'icon': context['icon'],
+                'context_instructions': context['context_instructions'],
+                'interest_tags': context['interest_tags'],
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+        
+        if contexts_to_insert:
+            logging.info(f"[BACKGROUND] Inserting {len(contexts_to_insert)} contexts to database...")
+            result = supabase.table('personalized_contexts').insert(contexts_to_insert).execute()
+            logging.info(f"[BACKGROUND] Successfully saved {len(result.data)} contexts for user {user_id}")
+        else:
+            logging.warning(f"[BACKGROUND] No contexts to insert for user {user_id}")
+        
+    except Exception as e:
+        logging.error(f"[BACKGROUND] Error generating contexts for user {user_id}: {e}", exc_info=True)
+    finally:
+        # Mark generation as complete
+        context_generation_status[user_id] = False
+        logging.info(f"[BACKGROUND] Context generation completed for user {user_id}")
+
+# Add a simple in-memory store to track context generation status
+context_generation_status = {}
+
+@app.get("/api/personalized_contexts/status")
+async def get_context_generation_status(token: str = Query(...)):
+    """Check if contexts are currently being generated for the user"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        # Check if generation is in progress
+        is_generating = context_generation_status.get(user_id, False)
+        
+        return {
+            'is_generating': is_generating,
+            'user_id': user_id
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error checking context generation status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to check status: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -49,6 +49,46 @@ const contextTitles: { [key: string]: string } = {
   city: 'Finding Things to Do in the City'
 };
 
+// Cache for personalized context titles
+const personalizedContextTitles: { [key: string]: string } = {};
+
+// Function to get context title (handles both classic and personalized contexts)
+const getContextTitle = async (contextId: string, token?: string): Promise<string> => {
+  // If it's a classic context, return immediately
+  if (contextTitles[contextId]) {
+    return contextTitles[contextId];
+  }
+  
+  // If it's a personalized context (starts with "user_"), fetch from API
+  if (contextId.startsWith('user_')) {
+    // Check cache first
+    if (personalizedContextTitles[contextId]) {
+      return personalizedContextTitles[contextId];
+    }
+    
+    // Fetch from API
+    if (token) {
+      try {
+        const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+        const response = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
+        if (response.ok) {
+          const data = await response.json();
+          const context = data.contexts.find((ctx: any) => ctx.id === contextId);
+          if (context) {
+            personalizedContextTitles[contextId] = context.title;
+            return context.title;
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching personalized context title:', error);
+      }
+    }
+  }
+  
+  // Fallback to the original context ID
+  return contextId;
+};
+
 const languageNames: { [key: string]: string } = {
   en: 'English',
   it: 'Italian',
@@ -69,6 +109,9 @@ const HistoryPage = () => {
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const user = useUser();
+
+  // Add state for context titles
+  const [contextTitleCache, setContextTitleCache] = useState<{ [key: string]: string }>({});
 
   // Report card modal state
   const [showReportCardModal, setShowReportCardModal] = useState(false);
@@ -108,7 +151,14 @@ const HistoryPage = () => {
           .order('created_at', { ascending: false });
 
         if (error) throw error;
-        setConversations(data || []);
+        
+        const conversationsData = data || [];
+        setConversations(conversationsData);
+        
+        // Load personalized context titles for any conversations that use them
+        if (session?.access_token) {
+          await loadPersonalizedContextTitles(conversationsData, session.access_token);
+        }
       } catch (error) {
         console.error('Error fetching conversations:', error);
         setError('Failed to load conversations');
@@ -121,6 +171,46 @@ const HistoryPage = () => {
       fetchConversations();
     }
   }, [user]);
+  
+  const loadPersonalizedContextTitles = async (conversations: Conversation[], token: string) => {
+    const personalizedContextIds = conversations
+      .map(conv => conv.context)
+      .filter(contextId => contextId.startsWith('user_'));
+    
+    if (personalizedContextIds.length === 0) return;
+    
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
+      if (response.ok) {
+        const data = await response.json();
+        const titleCache: { [key: string]: string } = {};
+        
+        data.contexts.forEach((context: any) => {
+          titleCache[context.id] = context.title;
+        });
+        
+        setContextTitleCache(titleCache);
+      }
+    } catch (error) {
+      console.error('Error loading personalized context titles:', error);
+    }
+  };
+  
+  const getDisplayContextTitle = (contextId: string): string => {
+    // Try classic contexts first
+    if (contextTitles[contextId]) {
+      return contextTitles[contextId];
+    }
+    
+    // Try personalized context cache
+    if (contextTitleCache[contextId]) {
+      return contextTitleCache[contextId];
+    }
+    
+    // Fallback to context ID
+    return contextId;
+  };
 
   const loadConversationData = async (conversationId: string) => {
     setConversationLoading(true);
@@ -374,7 +464,7 @@ const HistoryPage = () => {
                         className="cursor-pointer flex-1"
                       >
                         <h3 className="text-lg font-medium text-orange-600">
-                          {contextTitles[conversation.context] || conversation.context}
+                          {getDisplayContextTitle(conversation.context)}
                         </h3>
                         <p className="text-sm text-gray-500">
                           {new Date(conversation.created_at).toLocaleDateString()}

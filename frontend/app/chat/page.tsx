@@ -52,6 +52,44 @@ function ChatComponent() {
   const [conversationStarted, setConversationStarted] = useState(false);
   const [isMicPrompted, setIsMicPrompted] = useState(false);
   
+  // Add state for personalized context titles
+  const [contextTitleCache, setContextTitleCache] = useState<{ [key: string]: string }>({});
+  
+  // Function to get display context title
+  const getDisplayContextTitle = (contextId: string): string => {
+    // Try classic contexts first
+    if (contextTitles[contextId]) {
+      return contextTitles[contextId];
+    }
+    
+    // Try personalized context cache
+    if (contextTitleCache[contextId]) {
+      return contextTitleCache[contextId];
+    }
+    
+    // Fallback to context ID
+    return contextId;
+  };
+
+  // Function to load personalized context titles
+  const loadPersonalizedContextTitles = async (token: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
+      if (response.ok) {
+        const data = await response.json();
+        const titleCache: { [key: string]: string } = {};
+        
+        data.contexts.forEach((context: any) => {
+          titleCache[context.id] = context.title;
+        });
+        
+        setContextTitleCache(titleCache);
+      }
+    } catch (error) {
+      console.error('Error loading personalized context titles:', error);
+    }
+  };
+
   // Debug state changes
   useEffect(() => {
     console.log('[Chat] State change - conversationStarted:', conversationStarted);
@@ -60,6 +98,7 @@ function ChatComponent() {
   useEffect(() => {
     console.log('[Chat] State change - sessionReady:', sessionReady);
   }, [sessionReady]);
+
   const [customInstructions, setCustomInstructions] = useState<string | null>(null);
   const [lessonProgress, setLessonProgress] = useState<LessonProgress | null>(null);
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
@@ -126,6 +165,9 @@ function ChatComponent() {
         
         // Set token for API calls
         setToken(session.access_token);
+        
+        // Load personalized context titles
+        await loadPersonalizedContextTitles(session.access_token);
 
         const context = searchParams.get('context') || 'restaurant';
         const language = searchParams.get('language') || 'en';
@@ -998,7 +1040,7 @@ function ChatComponent() {
       <div className="flex flex-col items-center justify-center min-h-screen">
         <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center max-w-lg w-full mx-4">
           <h2 className="text-2xl font-bold mb-6 text-gray-800">Ready to begin?</h2>
-          <p className="mb-8 text-gray-700 text-center">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{selectedContext.startsWith('Lesson:') ? selectedContext.replace('Lesson:', '').trim() : contextTitles[selectedContext] || selectedContext}</b>.</p>
+          <p className="mb-8 text-gray-700 text-center">Your session is set up for <b>{languageNames[selectedLanguage]}</b> at level <b>{selectedLevel}</b> in the context of <b>{selectedContext.startsWith('Lesson:') ? selectedContext.replace('Lesson:', '').trim() : getDisplayContextTitle(selectedContext)}</b>.</p>
           
           {/* Integrated VAD Settings */}
           <div className="w-full space-y-6 mb-8">
@@ -1115,7 +1157,7 @@ function ChatComponent() {
               <span className="font-semibold text-base text-gray-800">
                 {selectedContext.startsWith('Lesson:')
                   ? selectedContext.replace('Lesson:', '').trim()
-                  : contextTitles[selectedContext] || selectedContext}
+                  : getDisplayContextTitle(selectedContext)}
               </span>
             </div>
             <div className="flex flex-col items-start">

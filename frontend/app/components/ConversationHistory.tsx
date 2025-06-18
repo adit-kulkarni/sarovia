@@ -39,6 +39,7 @@ export default function ConversationHistory() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [contextTitleCache, setContextTitleCache] = useState<{ [key: string]: string }>({});
   const router = useRouter();
 
   useEffect(() => {
@@ -51,13 +52,16 @@ export default function ConversationHistory() {
         }
 
         const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
-      const response = await fetch(`${API_BASE}/api/conversations?token=${session.access_token}`);
+        const response = await fetch(`${API_BASE}/api/conversations?token=${session.access_token}`);
         if (!response.ok) {
           throw new Error('Failed to fetch conversations');
         }
 
         const data = await response.json();
         setConversations(data);
+        
+        // Load personalized context titles for any conversations that use them
+        await loadPersonalizedContextTitles(data, session.access_token);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
       } finally {
@@ -67,6 +71,46 @@ export default function ConversationHistory() {
 
     fetchConversations();
   }, []);
+  
+  const loadPersonalizedContextTitles = async (conversations: Conversation[], token: string) => {
+    const personalizedContextIds = conversations
+      .map(conv => conv.context)
+      .filter(contextId => contextId.startsWith('user_'));
+    
+    if (personalizedContextIds.length === 0) return;
+    
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
+      if (response.ok) {
+        const data = await response.json();
+        const titleCache: { [key: string]: string } = {};
+        
+        data.contexts.forEach((context: any) => {
+          titleCache[context.id] = context.title;
+        });
+        
+        setContextTitleCache(titleCache);
+      }
+    } catch (error) {
+      console.error('Error loading personalized context titles:', error);
+    }
+  };
+  
+  const getDisplayContextTitle = (contextId: string): string => {
+    // Try classic contexts first
+    if (contextTitles[contextId]) {
+      return contextTitles[contextId];
+    }
+    
+    // Try personalized context cache
+    if (contextTitleCache[contextId]) {
+      return contextTitleCache[contextId];
+    }
+    
+    // Fallback to context ID
+    return contextId;
+  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -117,7 +161,7 @@ export default function ConversationHistory() {
           >
             <div className="flex justify-between items-start mb-2">
               <div>
-                <span className="font-semibold text-orange-600">{contextTitles[conversation.context]}</span>
+                <span className="font-semibold text-orange-600">{getDisplayContextTitle(conversation.context)}</span>
                 <span className="text-gray-500 text-sm ml-2">({languageNames[conversation.language]})</span>
               </div>
               <span className="text-xs text-gray-400">{formatDate(conversation.created_at)}</span>
