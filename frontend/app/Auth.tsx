@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../supabaseClient';
+import { supabase, getURL } from '../supabaseClient';
 
 const contextAvatars = [
   {
@@ -52,7 +52,13 @@ export default function Auth() {
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({ 
+      email, 
+      password,
+      options: {
+        emailRedirectTo: getURL()
+      }
+    });
     if (error) {
       setError(error.message);
     } else {
@@ -89,7 +95,7 @@ export default function Auth() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/`
+        redirectTo: getURL()
       }
     });
     if (error) {
