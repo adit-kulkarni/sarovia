@@ -1343,6 +1343,9 @@ const Dashboard = () => {
     let interval: NodeJS.Timeout;
     
     if (showContextModal && token) {
+      // Check immediately when modal opens
+      checkContextGenerationStatus();
+      // Then check every 2 seconds
       interval = setInterval(checkContextGenerationStatus, 2000);
     }
     
@@ -2012,13 +2015,13 @@ const Dashboard = () => {
                           </h4>
                           <p className="text-gray-600">
                             {contextGenerationInProgress 
-                              ? 'Creating conversation scenarios based on your interests. This may take a moment.'
+                              ? 'Creating conversation scenarios with level-specific starter phrases based on your interests. This may take a moment.'
                               : 'Fetching your personalized conversation scenarios.'
                             }
                           </p>
                           {contextGenerationInProgress && (
                             <p className="text-sm text-purple-600 mt-2">
-                              ✨ Using AI to craft scenarios just for you
+                              ✨ Using AI to craft personalized scenarios with level-aware conversation starters
                             </p>
                           )}
                         </div>
@@ -2154,7 +2157,7 @@ const Dashboard = () => {
                                   Generating more personalized contexts...
                                 </p>
                                 <p className="text-xs text-gray-600 mt-1">
-                                  ✨ Creating new scenarios based on your interests
+                                  ✨ Creating new scenarios with level-specific phrases based on your interests
                                 </p>
                               </div>
                             )}

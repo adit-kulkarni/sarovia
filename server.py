@@ -6087,6 +6087,10 @@ async def generate_personalized_contexts(request: GenerateContextsRequest, token
         for i, context in enumerate(generated_contexts):
             # Add timestamp and index to ensure unique IDs for Load More functionality
             context_id = f"user_{user_id[:8]}_{context['id_suffix']}_{timestamp}_{i}"
+            
+            # Extract level-specific phrases from OpenAI response
+            level_phrases = context.get('level_phrases', {})
+            
             contexts_to_insert.append({
                 'id': context_id,
                 'user_id': user_id,
@@ -6095,6 +6099,12 @@ async def generate_personalized_contexts(request: GenerateContextsRequest, token
                 'icon': context['icon'],
                 'context_instructions': context['context_instructions'],
                 'interest_tags': context['interest_tags'],
+                'a1_phrases': level_phrases.get('a1', []),
+                'a2_phrases': level_phrases.get('a2', []),
+                'b1_phrases': level_phrases.get('b1', []),
+                'b2_phrases': level_phrases.get('b2', []),
+                'c1_phrases': level_phrases.get('c1', []),
+                'c2_phrases': level_phrases.get('c2', []),
                 'created_at': datetime.now(timezone.utc).isoformat(),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             })

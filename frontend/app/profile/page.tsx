@@ -406,7 +406,7 @@ const ProfilePage = () => {
       });
 
       if (response.ok) {
-        alert('Interests saved successfully! Your personalized conversation contexts are being generated. Check the "Start Conversation" modal in a few moments to see them.');
+        alert('Interests saved successfully! Your personalized conversation contexts are being generated in the background. They will appear in the "Start Conversation" modal within a few minutes.');
       } else {
         throw new Error('Failed to save interests');
       }
