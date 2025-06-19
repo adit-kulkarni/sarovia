@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '../hooks/useUser';
 import { supabase } from '../../supabaseClient';
+import { useToast } from '../components/Toast';
 
 interface SelectedInterest {
   parent_interest: string;
@@ -12,6 +13,7 @@ interface SelectedInterest {
 
 const ProfilePage = () => {
   const user = useUser();
+  const { addToast } = useToast();
   const [selectedInterests, setSelectedInterests] = useState<SelectedInterest[]>([]);
   const [overlayInterest, setOverlayInterest] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -406,13 +408,13 @@ const ProfilePage = () => {
       });
 
       if (response.ok) {
-        alert('Interests saved successfully! Your personalized conversation contexts are being generated in the background. They will appear in the "Start Conversation" modal within a few minutes.');
+        addToast('Interests saved successfully! Your personalized conversation contexts are being generated in the background. They will appear in the "Start Conversation" modal within a few minutes.', 'success', 8000);
       } else {
         throw new Error('Failed to save interests');
       }
     } catch (error) {
       console.error('Error saving interests:', error);
-      alert('Failed to save interests. Please try again.');
+      addToast('Failed to save interests. Please try again.', 'error');
     } finally {
       setSaving(false);
     }
@@ -441,10 +443,10 @@ const ProfilePage = () => {
       setSelectedInterests([]);
       setShowClearModal(false);
       
-      alert(`All interests cleared successfully! Removed ${result.deleted_interests} interests and ${result.deleted_contexts} personalized contexts.`);
+      addToast(`All interests cleared successfully! Removed ${result.deleted_interests} interests and ${result.deleted_contexts} personalized contexts.`, 'success');
     } catch (error) {
       console.error('Error clearing interests:', error);
-      alert('Failed to clear interests. Please try again.');
+      addToast('Failed to clear interests. Please try again.', 'error');
     } finally {
       setClearing(false);
     }

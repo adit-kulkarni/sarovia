@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { TrashIcon } from '@heroicons/react/24/solid';
 import { useRouter } from 'next/navigation';
+import { useToast } from './Toast';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
@@ -67,6 +68,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
   const [isUnseen, setIsUnseen] = useState(false); // Track if suggestions are unseen (red vs grey)
 
   const router = useRouter();
+  const { addToast, showConfirm } = useToast();
 
   useEffect(() => {
     loadCustomLessons();
@@ -133,31 +135,33 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
       // Use router.push with same URL pattern as regular lessons
       router.push(`/chat?conversation=${data.conversation_id}&curriculum_id=${curriculumId}`);
     } catch (err) {
-      // Use alert for consistency with regular lessons
-      alert(err instanceof Error ? err.message : 'Unknown error');
+      // Use toast for consistency with regular lessons
+      addToast(err instanceof Error ? err.message : 'Unknown error', 'error');
     }
   };
 
   const deleteCustomLesson = async (lessonId: string) => {
     if (!token) return;
     
-    if (!confirm('Are you sure you want to delete this custom lesson?')) {
-      return;
-    }
-    
-    try {
-      const response = await fetch(`${API_BASE}/api/custom_lessons/${lessonId}?token=${token}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to delete custom lesson');
+    showConfirm(
+      'Are you sure you want to delete this custom lesson?',
+      async () => {
+        try {
+          const response = await fetch(`${API_BASE}/api/custom_lessons/${lessonId}?token=${token}`, {
+            method: 'DELETE',
+          });
+          
+          if (!response.ok) {
+            throw new Error('Failed to delete custom lesson');
+          }
+          
+          setCustomLessons(prev => prev.filter(lesson => lesson.id !== lessonId));
+          addToast('Custom lesson deleted successfully', 'success');
+        } catch (err) {
+          addToast(err instanceof Error ? err.message : 'Unknown error', 'error');
+        }
       }
-      
-      setCustomLessons(prev => prev.filter(lesson => lesson.id !== lessonId));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    }
+    );
   };
 
   // New suggestion system functions
@@ -280,7 +284,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
         setSuggestionsCount(updatedLessons.length);
       }
       
-      alert('Custom lesson created successfully!');
+      addToast('Custom lesson created successfully!', 'success');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
@@ -360,11 +364,10 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
   const refreshSuggestions = async () => {
     if (!token || !curriculumId) return;
     
-    if (!confirm('This will generate new suggestions and count against your daily limit (3 per day). Continue?')) {
-      return;
-    }
-    
-    setRefreshing(true);
+    showConfirm(
+      'This will generate new suggestions and count against your daily limit (3 per day). Continue?',
+      async () => {
+        setRefreshing(true);
     try {
       const response = await fetch(`${API_BASE}/api/lesson_suggestions/refresh?token=${token}`, {
         method: 'POST',
@@ -392,7 +395,7 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
         setIsUnseen(true); // New suggestions are always unseen
         setShowSuggestions(true);
       } else {
-        alert(data.message || 'No new suggestions available');
+        addToast(data.message || 'No new suggestions available', 'info');
         setHasNotifications(false);
         setSuggestionsCount(0);
         setIsUnseen(false);
@@ -402,6 +405,8 @@ export default function WeaknessAnalysis({ curriculumId, language, token }: Weak
     } finally {
       setRefreshing(false);
     }
+      }
+    );
   };
 
   const showSuggestionsModal = () => {

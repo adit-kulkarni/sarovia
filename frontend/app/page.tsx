@@ -20,6 +20,7 @@ import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
+import { useToast } from './components/Toast';
 
 import LessonSummaryModal from './components/LessonSummaryModal';
 
@@ -450,6 +451,7 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   language: string; 
 }) => {
   const router = useRouter();
+  const { addToast } = useToast();
   const [insights, setInsights] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -606,7 +608,7 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
       
     } catch (err) {
       console.error('Error creating and starting lesson:', err);
-      alert(err instanceof Error ? err.message : 'Failed to create and start lesson');
+      addToast(err instanceof Error ? err.message : 'Failed to create and start lesson', 'error');
     }
   };
 
@@ -943,6 +945,7 @@ const Dashboard = () => {
   const router = useRouter();
 
   const user = useUser();
+  const { addToast } = useToast();
 
   // Function to get personalized greeting based on time of day
   const getPersonalizedGreeting = () => {
@@ -1100,7 +1103,7 @@ const Dashboard = () => {
       const data = await res.json();
       router.push(`/chat?conversation=${data.conversation_id}&curriculum_id=${selectedCurriculum.id}`);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      addToast(e instanceof Error ? e.message : String(e), 'error');
     }
   };
 
@@ -1177,11 +1180,11 @@ const Dashboard = () => {
       } else {
         const errorData = await response.json();
         console.error('Failed to generate more contexts:', errorData);
-        alert(errorData.detail || 'Failed to generate more contexts');
+        addToast(errorData.detail || 'Failed to generate more contexts', 'error');
       }
     } catch (error) {
       console.error('Error generating more contexts:', error);
-      alert('Failed to generate more contexts');
+      addToast('Failed to generate more contexts', 'error');
     } finally {
       setPersonalizedContextsLoading(false);
     }
@@ -1208,7 +1211,7 @@ const Dashboard = () => {
       // Get the progress ID for this lesson
       const progress = lessonProgress[lessonId];
       if (!progress || !progress.id) {
-        alert('No progress found for this lesson');
+        addToast('No progress found for this lesson', 'warning');
         return;
       }
 
@@ -1228,11 +1231,11 @@ const Dashboard = () => {
       } else {
         const errorText = await summaryResponse.text();
         console.error('[View Report Card] Failed to fetch summary:', errorText);
-        alert('Failed to load report card. Please try again.');
+        addToast('Failed to load report card. Please try again.', 'error');
       }
     } catch (error) {
       console.error('[View Report Card] Error:', error);
-      alert('Failed to load report card. Please try again.');
+      addToast('Failed to load report card. Please try again.', 'error');
     } finally {
       setLoadingSummaryMap(prev => ({ ...prev, [lessonId]: false }));
       setLoadingSummary(false);

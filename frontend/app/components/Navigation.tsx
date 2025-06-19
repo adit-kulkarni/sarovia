@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
+import { useToast } from './Toast';
 import { 
   HomeIcon, 
   BookOpenIcon, 
@@ -15,6 +16,7 @@ import {
 
 const Navigation = () => {
   const pathname = usePathname();
+  const { addToast } = useToast();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [debugClicks, setDebugClicks] = useState(0);
 
@@ -39,7 +41,7 @@ const Navigation = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
-        alert('❌ Not authenticated');
+        addToast('❌ Not authenticated', 'error');
         return;
       }
 
@@ -47,13 +49,13 @@ const Navigation = () => {
       const result = await response.json();
       
       if (result.status === 'success') {
-        alert('🎯 Sentry test successful! Check your dashboard.');
+        addToast('🎯 Sentry test successful! Check your dashboard.', 'success');
         setDebugClicks(0); // Reset clicks
       } else {
-        alert('❌ Test failed: ' + (result.detail || 'Unknown error'));
+        addToast('❌ Test failed: ' + (result.detail || 'Unknown error'), 'error');
       }
     } catch (error) {
-      alert('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
+      addToast('❌ Error: ' + (error instanceof Error ? error.message : String(error)), 'error');
     }
   };
 
