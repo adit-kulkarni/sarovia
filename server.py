@@ -183,6 +183,165 @@ LANGUAGES = {
     'kn': 'Kannada'
 }
 
+# Voice agent instruction system configuration
+BASE_PROMPT_TEMPLATE = """
+🎓 STUDENT LEVEL
+The student is at {level} level, knowing approximately {word_count} common {language_name} words and simple phrases. They can form very basic sentences primarily in the {tenses} only.
+
+🗣️ SPEAKING RULES - Stick to the following rules as closely as you can to ensure the best user experience. Break the rules sparingly, only if absolutely necessary to continue conversation.
+Speak {speech_speed}. The maximum sentence length is {max_sentence_length} words
+The maximum message length is {max_message_length} words
+Speak in the following tenses only: {tenses}
+
+Start every sentence with {language_name}.
+<!-- COMMENTED OUT FOR NOW: and provide an English translation for every sentence AFTER the {language_name}. -->
+
+💬 CONVERSATION ENGAGEMENT RULES - CRITICAL for keeping dialogue flowing:
+- ALWAYS ask questions to keep the student talking. Never just make statements.
+- Turn your responses into conversation starters: Instead of "Me gusta correr" say "Me gusta correr, ¿a ti también te gusta?" / "I like running, do you like it too?"
+- Share personal opinions/experiences with hooks for follow-up: "Me gusta correr, pero a veces me duelen las piernas" / "I like running, but sometimes my legs hurt"
+- Invite students to ask YOU questions: "Me encanta viajar, ¿quieres saber adónde voy?" / "I love traveling, do you want to know where I go?"
+- Use conversation bridges like: "Y tú, ¿qué piensas?" / "And you, what do you think?"
+
+🎯 LEVEL-SPECIFIC CONVERSATION STYLE:
+{conversation_style}
+
+🎭 SPEAKING CONTEXT/ROLEPLAY
+{context_instructions}
+
+🎯 TOPIC ADHERENCE - CRITICAL RULES
+- NEVER deviate from the context theme. If the student tries to change topics, gently redirect them back to the context.
+- ALL your responses must relate directly to the context scenario. Do not discuss unrelated topics.
+- If conversation naturally reaches an end point, either:
+  a) Ask if they want to end the conversation: "¿Quieres terminar nuestra conversación?" / "Do you want to end our conversation?"
+  b) Suggest a new angle within the same context: "Hablemos de otro aspecto de [context topic]" / "Let's talk about another aspect of [context topic]"
+- Stay in character throughout the entire conversation. Your role and personality are defined by the context instructions above.
+
+❓ EXAMPLE CONVERSATION STARTERS - These are example phrases to inspire your conversation style. You can use them, adapt them, or create similar ones. Focus on natural conversation flow, not just repeating phrases:
+{starter_questions}
+
+Your primary goal is to have a smooth, engaging conversation that stays in character and within the context theme. Use these examples as inspiration for the style and complexity level, but prioritize natural dialogue over using specific phrases.
+
+🔄 CONVERSATION FLOW EXAMPLES:
+Instead of: "Me gusta la comida italiana." / "I like Italian food."
+Say: "Me gusta la comida italiana, ¿cuál es tu comida favorita?" / "I like Italian food, what's your favorite food?"
+
+Instead of: "Voy al gimnasio." / "I go to the gym."
+Say: "Voy al gimnasio todos los días, pero es difícil. ¿Tú haces ejercicio?" / "I go to the gym every day, but it's hard. Do you exercise?"
+
+Always end with questions, opinions that invite response, or invitations for the student to ask you something!
+
+🛠️ WHEN STUDENTS MAKE MISTAKES
+Correct gently and clearly and then continue conversation. If the mistake is major ask the student to try saying it again
+
+⚠️ IMPORTANT
+- Never break character or persona
+- Never stray from the context topic  
+- Focus on natural conversation flow while staying within your level constraints
+- If conversation stalls, reinvigorate it with new questions or perspectives within the same context theme
+- PRIORITIZE asking questions over making statements - your job is to get the student talking
+- Every response should encourage the student to share more or ask you something back
+- Be engaging and curious about the student's thoughts and experiences
+"""
+
+# Level-specific configurations
+LEVEL_CONFIG = {
+    "A1": {
+        "word_count": "150-250",
+        "tenses": "present tense",
+        "speech_speed": "very slowly with clear pauses between sentences",
+        "max_sentence_length": "6",
+        "max_message_length": "20",
+        "conversation_style": "Ask very simple, direct questions. Use basic question words: ¿Qué? ¿Dónde? ¿Te gusta? ¿Tienes? Always encourage them to respond."
+    },
+    "A2": {
+        "word_count": "250-500", 
+        "tenses": "present tense and simple past tense",
+        "speech_speed": "slowly with clear pronunciation",
+        "max_sentence_length": "10",
+        "max_message_length": "30",
+        "conversation_style": "Ask simple questions and share basic opinions with follow-up questions. Use ¿Por qué? and ¿Cómo? to encourage elaboration."
+    },
+    "B1": {
+        "word_count": "500-1000",
+        "tenses": "present, past, and simple future tenses",
+        "speech_speed": "at moderate pace with clear articulation",
+        "max_sentence_length": "15",
+        "max_message_length": "50",
+        "conversation_style": "Share more detailed opinions with open-ended questions. Use phrases like 'Me parece que...' and ask '¿Qué opinas tú?'"
+    },
+    "B2": {
+        "word_count": "1000-2000",
+        "tenses": "all major tenses including conditional and subjunctive",
+        "speech_speed": "at normal conversational pace",
+        "max_sentence_length": "20",
+        "max_message_length": "75",
+        "conversation_style": "Engage in nuanced discussions with hypothetical questions and personal anecdotes that invite sharing."
+    },
+    "C1": {
+        "word_count": "2000-4000",
+        "tenses": "all tenses with complex grammatical structures",
+        "speech_speed": "at native-like pace with natural flow",
+        "max_sentence_length": "25",
+        "max_message_length": "100",
+        "conversation_style": "Use sophisticated conversation techniques with abstract concepts and encourage critical thinking through probing questions."
+    },
+    "C2": {
+        "word_count": "4000+",
+        "tenses": "all tenses with advanced nuanced expressions",
+        "speech_speed": "at full native pace with cultural nuances",
+        "max_sentence_length": "30",
+        "max_message_length": "120",
+        "conversation_style": "Engage in highly sophisticated discourse with cultural references, subtle humor, and complex philosophical questions."
+    }
+}
+
+def get_level_variables(level: str, language: str) -> dict:
+    """Get level-specific variables for the base prompt template"""
+    config = LEVEL_CONFIG.get(level, LEVEL_CONFIG["A1"])
+    language_name = LANGUAGES.get(language, language)
+    
+    return {
+        "level": level,
+        "word_count": config["word_count"],
+        "language_name": language_name,
+        "tenses": config["tenses"],
+        "speech_speed": config["speech_speed"],
+        "max_sentence_length": config["max_sentence_length"],
+        "max_message_length": config["max_message_length"],
+        "conversation_style": config.get("conversation_style", "Ask engaging questions to keep the conversation flowing.")
+    }
+
+def format_starter_questions(questions: List[str]) -> str:
+    """Format starter questions for the prompt"""
+    if not questions:
+        return "No specific starter questions available - be creative!"
+    
+    # Format with semicolons for better structure and readability
+    formatted_questions = []
+    for q in questions:
+        formatted_questions.append(f'"{q}"')
+    
+    return "; ".join(formatted_questions)
+
+def get_personalized_context_starter_questions(context_id: str, level: str, user_id: str) -> List[str]:
+    """Get level-specific starter questions for a personalized context"""
+    if not context_id.startswith('user_') or not user_id:
+        return []
+    
+    try:
+        level_column = f"{level.lower()}_phrases"
+        result = supabase.table('personalized_contexts').select(level_column).eq('id', context_id).eq('user_id', user_id).execute()
+        
+        if result.data and len(result.data) > 0:
+            phrases = result.data[0].get(level_column, [])
+            return phrases if phrases else []
+        
+    except Exception as e:
+        logging.error(f"Error fetching starter questions for context {context_id}, level {level}: {e}")
+    
+    return []
+
 def get_feedback_categories(interaction_type: str = "audio") -> dict:
     """Return appropriate feedback categories based on interaction type"""
     
@@ -682,38 +841,30 @@ def get_context_specific_instructions(context: str, language: str) -> str:
     return context_guidelines.get(context, context_guidelines["restaurant"])
 
 def get_level_specific_instructions(level: str, context: str, language: str, user_id: str = None) -> str:
-    """Generate level-specific instructions for the AI"""
-    level_guidelines = {
-        "A1": "CRITICAL: Use ONLY basic vocabulary (300-500 most common words). Speak in SHORT, SIMPLE sentences (5-8 words max). Use ONLY present tense. Speak VERY SLOWLY with clear pauses between sentences. Provide English translations frequently. Repeat key words. Avoid complex grammar entirely.",
-        "A2": "Use basic vocabulary (500-1000 words). Keep sentences SHORT (8-12 words). Introduce simple past tense occasionally. Speak SLOWLY with clear pronunciation. Provide moderate English support. Use simple connecting words (and, but, because).",
-        "B1": "Use intermediate vocabulary. Sentences can be longer (12-15 words). Introduce more complex structures gradually. Include some idiomatic expressions. Speak at moderate pace. Provide minimal English support.",
-        "B2": "Use advanced vocabulary and varied sentence structures. Focus on natural conversation flow. Include cultural references. Speak at normal pace. Provide English support only when necessary.",
-        "C1": "Use sophisticated vocabulary and complex structures. Include cultural nuances and subtle meanings. Speak at native pace. Provide English support only for very complex concepts.",
-        "C2": "Use fully native-like complexity with advanced expressions, cultural references, and nuanced meanings. Speak at natural native pace. Provide English support only when absolutely necessary."
+    """Generate level-specific instructions using the new base prompt template"""
+    # Get level-specific variables
+    level_vars = get_level_variables(level, language)
+    
+    # Get context-specific instructions
+    context_instructions = get_context_specific_instructions_extended(context, language, user_id)
+    
+    # Get starter questions for personalized contexts
+    starter_questions = []
+    if context.startswith('user_') and user_id:
+        starter_questions = get_personalized_context_starter_questions(context, level, user_id)
+    
+    # Format starter questions
+    formatted_questions = format_starter_questions(starter_questions)
+    
+    # Combine all variables for the template
+    template_vars = {
+        **level_vars,
+        "context_instructions": context_instructions,
+        "starter_questions": formatted_questions
     }
     
-    base_instructions = (
-        f"You are a {LANGUAGES[language]} language tutor. Your primary goal is to help students learn {LANGUAGES[language]} through natural conversation. "
-        "Speak primarily in the target language, using English only when necessary for explanations. Maintain a patient, encouraging, and supportive tone throughout the conversation.\n\n"
-        "When interacting with students:\n"
-        "- Identify and correct errors in grammar (verb conjugations, gender agreement), vocabulary (word choice, idioms), pronunciation, and sentence structure\n"
-        "- Provide immediate but non-disruptive corrections\n"
-        "- Give clear, concise explanations for each correction\n"
-        "- Categorize corrections appropriately (grammar, vocabulary, etc.)\n"
-        "- Adapt your speech rate and language complexity to match the student's level\n"
-        "- Focus on creating a natural, conversational flow while ensuring learning objectives are met\n\n"
-        "Remember to:\n"
-        "- Be encouraging and supportive\n"
-        "- Provide clear explanations\n"
-        "- Maintain a balance between correction and conversation flow\n"
-        "- Use appropriate examples to illustrate corrections\n\n"
-        f"🎯 CRITICAL: STUDENT LEVEL IS {level} - YOU MUST STRICTLY FOLLOW THESE GUIDELINES:\n"
-        f"{level_guidelines.get(level, level_guidelines['A1'])}\n\n"
-        f"⚠️ IMPORTANT: The student's level ({level}) determines how you should speak. Do NOT use vocabulary or grammar above their level. "
-        f"If you're unsure about a word's difficulty, choose a simpler alternative.\n\n"
-        f"CONVERSATION CONTEXT:\n{get_context_specific_instructions_extended(context, language, user_id)}"
-    )
-    return base_instructions
+    # Generate the final instructions using the base template
+    return BASE_PROMPT_TEMPLATE.format(**template_vars)
 
 async def process_feedback_background(message_id: str, language: str, level: str, client_ws: WebSocket, interaction_type: str = "audio"):
     """Process feedback in the background without blocking the conversation"""
@@ -5975,7 +6126,7 @@ async def generate_personalized_contexts(request: GenerateContextsRequest, token
         raise HTTPException(status_code=500, detail=f"Failed to generate contexts: {str(e)}")
 
 async def generate_contexts_with_openai(interests_text: str, count: int, existing_contexts: List[dict] = None) -> List[dict]:
-    """Generate personalized conversation contexts using OpenAI"""
+    """Generate personalized conversation contexts with level-specific starter phrases using OpenAI"""
     
     # Format existing contexts for the prompt if provided
     existing_context_text = ""
@@ -5986,10 +6137,12 @@ async def generate_contexts_with_openai(interests_text: str, count: int, existin
         existing_context_text += "\nPlease ensure new contexts are significantly different from these existing ones in theme, setting, and approach.\n"
     
     prompt = f"""
-Based on the following user interests, generate {count} engaging conversation contexts for language learning practice:
+Based on the following user interests, generate EXACTLY {count} engaging conversation contexts for language learning practice:
 
 User Interests:
 {interests_text}{existing_context_text}
+
+IMPORTANT: You MUST generate exactly {count} different contexts. Each context should be unique and cover different aspects of the user's interests.
 
 CRITICAL RULES FOR INTEREST COMBINATIONS:
 1. Child interests (like "South East Asia", "Italian", etc.) should ONLY be combined with their specific parent category
@@ -6013,6 +6166,46 @@ For each context, create a unique conversation scenario that incorporates their 
 4. **icon**: A single emoji that represents the context
 5. **context_instructions**: Detailed roleplay instructions for the AI (similar to restaurant/market contexts)
 6. **interest_tags**: Array of relevant interest tags
+7. **level_phrases**: Object containing starter phrases for each CEFR level (A1, A2, B1, B2, C1, C2)
+
+LEVEL-SPECIFIC STARTER PHRASES REQUIREMENTS:
+For each level, generate exactly 6 phrases in SPANISH:
+- 3 starter questions (conversation initiators) 
+- 3 interesting conversational phrases (deeper engagement topics that include statements with follow-up questions, opinions with hooks, or invitations to ask back)
+
+IMPORTANT: Conversational phrases should NOT be just questions. They should be statements that naturally invite response, like:
+- "Me gusta [topic], ¿a ti también?" / "I like [topic], do you too?"
+- "Tengo [experience], ¿qué piensas?" / "I have [experience], what do you think?"
+- "[Opinion], pero es difícil, ¿tú qué opinas?" / "[Opinion], but it's hard, what's your opinion?"
+
+CRITICAL TENSE CONSTRAINTS - ENFORCE STRICTLY:
+- A1: ONLY present tense (simple present only) - NO past, future, conditional, or subjunctive tenses. Use "tienes", "es", "vives", "te gusta", NOT "has estado", "has ido", "fuiste", "irás"
+- A2: Present tense + simple past tense only (preterite/indefinido like "fui", "comí", "hablé")
+- B1: Present, past, and simple future tenses
+- B2: All major tenses including conditional and subjunctive
+- C1: All tenses with complex grammatical structures
+- C2: All tenses with advanced nuanced expressions
+
+PHRASE COMPLEXITY SCALING:
+- A1: Very simple, basic vocabulary (150-250 words), short sentences (3-5 words max)
+- A2: Simple vocabulary (250-500 words), slightly longer sentences (5-8 words)
+- B1: Intermediate vocabulary (500-1000 words), more complex structures (8-12 words)
+- B2: Advanced vocabulary (1000-2000 words), natural conversation flow (12-18 words)
+- C1: Sophisticated vocabulary (2000-4000 words), cultural nuances (15-25 words)
+- C2: Native-like complexity (4000+ words), advanced expressions (20-30 words)
+
+CORRECT A1 PHRASE EXAMPLES for a "cycling" context (ONLY present tense) - NOTE: These should be conversational, not just questions:
+A1 starter questions: "¿Te gusta montar en bicicleta?", "¿Dónde montas en bicicleta?", "¿Haces ejercicio?"
+A1 interesting conversational phrases: "Me gusta montar en bicicleta, ¿a ti también?", "Tengo una bicicleta roja, ¿qué bicicleta tienes?", "Montar en bicicleta es difícil, ¿tú qué piensas?"
+
+INCORRECT A1 EXAMPLES (DO NOT USE - these contain past/perfect tenses):
+❌ "¿Has estado en Asia?" (perfect tense - NOT allowed for A1)
+❌ "¿Fuiste al parque?" (past tense - NOT allowed for A1)
+❌ "¿Has viajado mucho?" (perfect tense - NOT allowed for A1)
+
+C2 advanced examples:
+C2 starter questions: "¿Qué opinas sobre el ciclismo como medio de transporte sostenible?", "¿Consideras participar en competiciones de alto rendimiento?", "¿Cómo has evolucionado técnicamente desde que comenzaste?"
+C2 interesting phrases: "¿Cuál ha sido tu experiencia más desafiante en ruta?", "¿Qué modificaciones has realizado en tu equipamiento?", "¿Cómo influye la aerodinámica en tu rendimiento?"
 
 The context_instructions should be detailed roleplay guidelines that:
 - Create an immersive scenario related to their interests
@@ -6030,12 +6223,20 @@ Format as JSON object with an "contexts" array:
       "description": "...",
       "icon": "...",
       "context_instructions": "...",
-      "interest_tags": ["...", "..."]
+      "interest_tags": ["...", "..."],
+      "level_phrases": {{
+        "a1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+        "a2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+        "b1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+        "b2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+        "c1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+        "c2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"]
+      }}
     }}
   ]
 }}
 
-Make each context unique, engaging, and directly relevant to their specific interests. Ensure each context stays within the logical boundaries of the interest categories - don't mix unrelated interests just because they share geographic or thematic elements.
+Make each context unique, engaging, and directly relevant to their specific interests. Ensure each context stays within the logical boundaries of the interest categories and that all phrases are contextually relevant and follow the tense constraints strictly.
 """
 
     try:
@@ -6070,19 +6271,47 @@ Make each context unique, engaging, and directly relevant to their specific inte
                 import json
                 contexts_data = json.loads(result)
                 logging.info(f"[OPENAI] Parsed data type: {type(contexts_data)}")
+                logging.info(f"[OPENAI] Parsed data keys: {list(contexts_data.keys()) if isinstance(contexts_data, dict) else 'Not a dict'}")
                 
                 # If the response is wrapped in an object with a key, extract the array
                 if isinstance(contexts_data, dict):
                     if "contexts" in contexts_data:
                         contexts_data = contexts_data["contexts"]
+                        logging.info(f"[OPENAI] Extracted contexts array with {len(contexts_data)} items")
                     elif len(contexts_data) == 1:
                         key = list(contexts_data.keys())[0]
                         if isinstance(contexts_data[key], list):
                             contexts_data = contexts_data[key]
+                            logging.info(f"[OPENAI] Extracted array from key '{key}' with {len(contexts_data)} items")
                 
                 if not isinstance(contexts_data, list):
                     logging.error(f"[OPENAI] Expected array, got: {type(contexts_data)}")
+                    logging.error(f"[OPENAI] Full response data: {contexts_data}")
                     raise Exception(f"Expected array of contexts from OpenAI, got {type(contexts_data)}")
+                
+                # Validate that we got the expected number of contexts
+                if len(contexts_data) != count:
+                    logging.warning(f"[OPENAI] Expected {count} contexts but got {len(contexts_data)}")
+                
+                # Validate each context has required fields
+                for i, context in enumerate(contexts_data):
+                    required_fields = ['id_suffix', 'title', 'description', 'icon', 'context_instructions', 'interest_tags', 'level_phrases']
+                    missing_fields = [field for field in required_fields if field not in context]
+                    if missing_fields:
+                        logging.error(f"[OPENAI] Context {i} missing fields: {missing_fields}")
+                    
+                    # Validate level_phrases structure
+                    if 'level_phrases' in context:
+                        expected_levels = ['a1', 'a2', 'b1', 'b2', 'c1', 'c2']
+                        level_phrases = context['level_phrases']
+                        if isinstance(level_phrases, dict):
+                            for level in expected_levels:
+                                if level not in level_phrases:
+                                    logging.error(f"[OPENAI] Context {i} missing level '{level}' in level_phrases")
+                                elif not isinstance(level_phrases[level], list) or len(level_phrases[level]) != 6:
+                                    logging.error(f"[OPENAI] Context {i} level '{level}' should have exactly 6 phrases, got {len(level_phrases[level]) if isinstance(level_phrases[level], list) else 'not a list'}")
+                        else:
+                            logging.error(f"[OPENAI] Context {i} level_phrases is not a dict: {type(level_phrases)}")
                     
                 logging.info(f"[OPENAI] Successfully generated {len(contexts_data)} contexts")
                 return contexts_data
@@ -6172,6 +6401,10 @@ async def generate_contexts_for_new_interests(user_id: str):
         contexts_to_insert = []
         for context in generated_contexts:
             context_id = f"user_{user_id[:8]}_{context['id_suffix']}"
+            
+            # Extract level-specific phrases from OpenAI response
+            level_phrases = context.get('level_phrases', {})
+            
             contexts_to_insert.append({
                 'id': context_id,
                 'user_id': user_id,
@@ -6180,6 +6413,12 @@ async def generate_contexts_for_new_interests(user_id: str):
                 'icon': context['icon'],
                 'context_instructions': context['context_instructions'],
                 'interest_tags': context['interest_tags'],
+                'a1_phrases': level_phrases.get('a1', []),
+                'a2_phrases': level_phrases.get('a2', []),
+                'b1_phrases': level_phrases.get('b1', []),
+                'b2_phrases': level_phrases.get('b2', []),
+                'c1_phrases': level_phrases.get('c1', []),
+                'c2_phrases': level_phrases.get('c2', []),
                 'created_at': datetime.now(timezone.utc).isoformat(),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             })
@@ -6197,6 +6436,171 @@ async def generate_contexts_for_new_interests(user_id: str):
         # Mark generation as complete
         context_generation_status[user_id] = False
         logging.info(f"[BACKGROUND] Context generation completed for user {user_id}")
+
+async def generate_phrases_for_existing_context(context_id: str, context_data: dict, language: str = "es") -> dict:
+    """Generate level-specific phrases for an existing context"""
+    try:
+        # Create a focused prompt for generating just the phrases
+        context_title = context_data.get('title', 'Unknown Context')
+        context_description = context_data.get('description', '')
+        context_instructions = context_data.get('context_instructions', '')
+        
+        # Extract key themes from the context for better phrase generation
+        context_summary = f"Context: {context_title}\nDescription: {context_description}\nScenario: {context_instructions[:200]}..."
+        
+        prompt = f"""
+Generate level-specific conversation starter phrases for this language learning context:
+
+{context_summary}
+
+Generate exactly 6 phrases in {LANGUAGES.get(language, 'Spanish')} for each CEFR level (A1-C2):
+- 3 starter questions (conversation initiators)
+- 3 interesting conversational phrases (deeper engagement topics that include statements with follow-up questions, opinions with hooks, or invitations to ask back)
+
+IMPORTANT: Conversational phrases should NOT be just questions. They should be statements that naturally invite response, like:
+- "Me gusta [topic], ¿a ti también?" / "I like [topic], do you too?"
+- "Tengo [experience], ¿qué piensas?" / "I have [experience], what do you think?"
+- "[Opinion], pero es difícil, ¿tú qué opinas?" / "[Opinion], but it's hard, what's your opinion?"
+
+CRITICAL TENSE CONSTRAINTS - ENFORCE STRICTLY:
+- A1: ONLY present tense (simple present only) - NO past, future, conditional, or subjunctive tenses. Use "tienes", "es", "vives", "te gusta", NOT "has estado", "has ido", "fuiste", "irás"
+- A2: Present tense + simple past tense only (preterite/indefinido like "fui", "comí", "hablé")
+- B1: Present, past, and simple future tenses
+- B2: All major tenses including conditional and subjunctive
+- C1: All tenses with complex grammatical structures
+- C2: All tenses with advanced nuanced expressions
+
+PHRASE COMPLEXITY SCALING:
+- A1: Very simple, basic vocabulary (150-250 words), short sentences (3-5 words max)
+- A2: Simple vocabulary (250-500 words), slightly longer sentences (5-8 words)
+- B1: Intermediate vocabulary (500-1000 words), more complex structures (8-12 words)
+- B2: Advanced vocabulary (1000-2000 words), natural conversation flow (12-18 words)
+- C1: Sophisticated vocabulary (2000-4000 words), cultural nuances (15-25 words)
+- C2: Native-like complexity (4000+ words), advanced expressions (20-30 words)
+
+CORRECT A1 EXAMPLES (ONLY present tense):
+✅ "¿Te gusta esto?" / "¿Dónde vives?" / "¿Qué tienes?"
+
+INCORRECT A1 EXAMPLES (DO NOT USE):
+❌ "¿Has estado aquí?" (perfect tense)
+❌ "¿Fuiste ayer?" (past tense)
+❌ "¿Irás mañana?" (future tense)
+
+All phrases must be directly relevant to this specific context theme. Ensure tense constraints are strictly followed.
+
+Format as JSON:
+{{
+  "level_phrases": {{
+    "a1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+    "a2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+    "b1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+    "b2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+    "c1": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"],
+    "c2": ["phrase1", "phrase2", "phrase3", "phrase4", "phrase5", "phrase6"]
+  }}
+}}
+"""
+
+        logging.info(f"[PHRASES] Generating phrases for context {context_id}...")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.7,
+                    "response_format": {"type": "json_object"}
+                }
+            ) as response:
+                if response.status != 200:
+                    response_text = await response.text()
+                    logging.error(f"[PHRASES] OpenAI API error: {response_text}")
+                    raise Exception(f"OpenAI API error: {response_text}")
+                
+                response_data = await response.json()
+                result = response_data["choices"][0]["message"]["content"]
+                
+                # Parse JSON response
+                import json
+                phrases_data = json.loads(result)
+                
+                if "level_phrases" in phrases_data:
+                    return phrases_data["level_phrases"]
+                else:
+                    logging.error(f"[PHRASES] Invalid response format for context {context_id}")
+                    return {}
+                
+    except Exception as e:
+        logging.error(f"[PHRASES] Error generating phrases for context {context_id}: {e}")
+        return {}
+
+async def populate_phrases_for_existing_contexts(user_id: str = None, language: str = "es"):
+    """Populate level-specific phrases for existing contexts that don't have them"""
+    try:
+        logging.info(f"[POPULATE] Starting phrase population for existing contexts (user: {user_id})")
+        
+        # Build query based on whether user_id is provided
+        query = supabase.table('personalized_contexts').select('*')
+        
+        if user_id:
+            query = query.eq('user_id', user_id)
+        
+        # Find contexts that don't have phrases populated
+        result = query.execute()
+        
+        contexts_to_update = []
+        for context in result.data:
+            # Check if any level phrases are missing or empty
+            needs_phrases = (
+                not context.get('a1_phrases') or
+                not context.get('a2_phrases') or
+                not context.get('b1_phrases') or
+                not context.get('b2_phrases') or
+                not context.get('c1_phrases') or
+                not context.get('c2_phrases')
+            )
+            
+            if needs_phrases:
+                contexts_to_update.append(context)
+        
+        logging.info(f"[POPULATE] Found {len(contexts_to_update)} contexts needing phrase generation")
+        
+        # Generate phrases for each context
+        for context in contexts_to_update:
+            context_id = context['id']
+            logging.info(f"[POPULATE] Generating phrases for context {context_id}")
+            
+            # Generate the phrases
+            level_phrases = await generate_phrases_for_existing_context(context_id, context, language)
+            
+            if level_phrases:
+                # Update the context in the database
+                update_data = {
+                    'a1_phrases': level_phrases.get('a1', []),
+                    'a2_phrases': level_phrases.get('a2', []),
+                    'b1_phrases': level_phrases.get('b1', []),
+                    'b2_phrases': level_phrases.get('b2', []),
+                    'c1_phrases': level_phrases.get('c1', []),
+                    'c2_phrases': level_phrases.get('c2', []),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }
+                
+                supabase.table('personalized_contexts').update(update_data).eq('id', context_id).execute()
+                logging.info(f"[POPULATE] Successfully updated phrases for context {context_id}")
+            else:
+                logging.warning(f"[POPULATE] Failed to generate phrases for context {context_id}")
+        
+        logging.info(f"[POPULATE] Completed phrase population for {len(contexts_to_update)} contexts")
+        return len(contexts_to_update)
+        
+    except Exception as e:
+        logging.error(f"[POPULATE] Error populating phrases: {e}", exc_info=True)
+        return 0
 
 # Add a simple in-memory store to track context generation status
 context_generation_status = {}
@@ -6223,6 +6627,35 @@ async def get_context_generation_status(token: str = Query(...)):
     except Exception as e:
         logging.error(f"Error checking context generation status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to check status: {str(e)}")
+
+@app.post("/api/personalized_contexts/populate_phrases")
+async def populate_context_phrases(
+    language: str = Query(default="es", description="Language code (e.g., 'es', 'fr', 'de')"),
+    token: str = Query(...)
+):
+    """Populate level-specific phrases for existing contexts that don't have them"""
+    try:
+        # Verify JWT token and get user ID
+        payload = verify_jwt(token)
+        user_id = payload.get("sub") or payload.get("user_id")
+        
+        logging.info(f"[API] Phrase population requested by user {user_id} for language {language}")
+        
+        # Run the population function
+        updated_count = await populate_phrases_for_existing_contexts(user_id, language)
+        
+        return {
+            'success': True,
+            'updated_contexts': updated_count,
+            'message': f"Successfully populated phrases for {updated_count} contexts"
+        }
+        
+    except jwt.InvalidTokenError as e:
+        logging.error(f"JWT validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logging.error(f"Error populating context phrases: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to populate phrases: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
