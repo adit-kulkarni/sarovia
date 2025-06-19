@@ -1807,8 +1807,70 @@ async def generate_hint(level: str, context: str, language: str, conversation_hi
         logging.error(f"Error in generate_hint: {e}")
         return "Sorry, I couldn't generate a hint at this time."
 
+async def generate_custom_hint(level: str, context: str, language: str, custom_request: str, conversation_history: list, user_id: str = None) -> str:
+    """Generate a custom hint based on user's specific request"""
+    try:
+        # Get the conversation context and instructions
+        instructions = get_level_specific_instructions(level, context, language, user_id)
+        
+        # Format conversation history for context
+        if not conversation_history:
+            history_text = "This is the start of the conversation."
+        else:
+            # Take up to 3 most recent messages for context
+            recent_messages = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+            history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_messages])
+        
+        # Create the prompt for custom hint generation
+        prompt = f"""The user is learning {language} at level {level} in the context of {context}. They want to translate: "{custom_request}"
+
+        Learning context and instructions:
+        {instructions}
+
+        Recent conversation context:
+        {history_text}
+
+        Provide a direct, contextually accurate translation of their request into {language}.
+        - Translate exactly what they asked for, nothing more, nothing less
+        - Make it appropriate for their {level} level
+        - Do not add conversational elements, questions, or extra phrases
+        - Do not include explanations, commentary, or additional text
+        - If the input doesn't make grammatical sense, make only the minimal necessary adjustments
+        
+        Respond with ONLY the {language} translation."""
+
+        # Call OpenAI's chat completions API using aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": 200
+                }
+            ) as response:
+                if response.status != 200:
+                    response_text = await response.text()
+                    logging.error(f"Error generating custom hint: {response_text}")
+                    return "Sorry, I couldn't generate a hint at this time."
+                
+                response_data = await response.json()
+                hint = response_data["choices"][0]["message"]["content"].strip()
+                logging.debug(f"[generate_custom_hint] Generated custom hint for request: {custom_request}")
+                return hint
+            
+    except Exception as e:
+        logging.error(f"Error in generate_custom_hint: {e}")
+        return "Sorry, I couldn't generate a hint at this time."
+
 class HintRequest(BaseModel):
     conversation_id: str
+    custom_request: Optional[str] = None  # Optional text input for custom hint requests
 
 @app.post("/api/hint")
 async def get_hint(
@@ -1816,7 +1878,8 @@ async def get_hint(
     token: str = Query(...)
 ):
     conversation_id = request.conversation_id
-    logging.debug(f"[get_hint] Incoming request: conversation_id={conversation_id}, token={token}")
+    custom_request = request.custom_request
+    logging.debug(f"[get_hint] Incoming request: conversation_id={conversation_id}, custom_request={custom_request}, token={token}")
     try:
         # Verify token
         user_payload = verify_jwt(token)
@@ -1835,14 +1898,24 @@ async def get_hint(
         
         logging.debug(f"[get_hint] Found {len(messages.data)} messages for conversation")
         
-        # Generate hint
-        hint = await generate_hint(
-            conversation.data[0]['level'],
-            conversation.data[0]['context'],
-            conversation.data[0]['language'],
-            messages.data,
-            user_id
-        )
+        # Generate hint based on whether it's a custom request or general hint
+        if custom_request and custom_request.strip():
+            hint = await generate_custom_hint(
+                conversation.data[0]['level'],
+                conversation.data[0]['context'],
+                conversation.data[0]['language'],
+                custom_request.strip(),
+                messages.data,
+                user_id
+            )
+        else:
+            hint = await generate_hint(
+                conversation.data[0]['level'],
+                conversation.data[0]['context'],
+                conversation.data[0]['language'],
+                messages.data,
+                user_id
+            )
         
         logging.debug(f"[get_hint] Generated hint: {hint}")
         

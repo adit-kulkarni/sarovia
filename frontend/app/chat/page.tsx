@@ -48,6 +48,9 @@ function ChatComponent() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [currentHint, setCurrentHint] = useState<string | null>(null);
   const [isLoadingHint, setIsLoadingHint] = useState(false);
+  const [customHintInput, setCustomHintInput] = useState('');
+  const [showTranslateInput, setShowTranslateInput] = useState(false);
+  const [activeTab, setActiveTab] = useState<'feedback' | 'hints'>('feedback');
   const [conversation_id, setConversationId] = useState<string | null>(null);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, string>>({});
@@ -576,6 +579,9 @@ function ChatComponent() {
                 [data.messageId]: data.messageId
               }));
             }
+            // Only switch to feedback tab if the new feedback would be visible in filtered view
+            // For now, always switch - we'll implement smart filtering next
+            setActiveTab('feedback');
             setMessages(prevMessages => {
               const allIds = prevMessages.map(m => m.id);
               console.log('Current message ids:', allIds);
@@ -855,7 +861,7 @@ function ChatComponent() {
   };
 
   const getHint = async () => {
-    console.warn('getHint called, conversation_id:', conversation_id);
+    console.warn('getHint called, conversation_id:', conversation_id, 'customInput:', customHintInput);
     if (!conversation_id) {
       setError('No active conversation found');
       return;
@@ -871,8 +877,11 @@ function ChatComponent() {
         return;
       }
 
-              const url = `${API_BASE}/api/hint?token=${session.access_token}`;
-      const body = { conversation_id };
+      const url = `${API_BASE}/api/hint?token=${session.access_token}`;
+      const body = { 
+        conversation_id,
+        ...(customHintInput.trim() && { custom_request: customHintInput.trim() })
+      };
       console.log('Sending hint request:', { url, body });
       
       const response = await fetch(url, {
@@ -893,6 +902,11 @@ function ChatComponent() {
       
       if (responseData.hint) {
         setCurrentHint(responseData.hint);
+        // Clear custom input after successful request
+        setCustomHintInput('');
+        setShowTranslateInput(false);
+        // Always switch to hints tab when hint arrives
+        setActiveTab('hints');
       } else {
         throw new Error('No hint received from server');
       }
@@ -904,6 +918,8 @@ function ChatComponent() {
       setIsLoadingHint(false);
     }
   };
+
+
 
   const handleFeedbackClick = (messageId: string) => {
     // Scroll to the message with feedback
@@ -1284,8 +1300,8 @@ function ChatComponent() {
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="max-w-6xl mx-auto space-y-4">
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-6xl mx-auto space-y-4 p-4">
             {messages.map((message, index) => (
               <div
                 key={index}
@@ -1301,51 +1317,57 @@ function ChatComponent() {
             ))}
             <div ref={messagesEndRef} />
           </div>
+          
+
         </div>
 
-        {/* Right Panel */}
+        {/* Right Panel - Tabbed Feedback/Hints */}
         <div className="w-80 bg-white/80 backdrop-blur-sm border-l border-orange-100 flex flex-col">
-          {/* Hints Section */}
-          <div className="flex-none p-4 border-b border-orange-100">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Conversation Hints</h3>
-              <button
-                onClick={getHint}
-                disabled={isLoadingHint}
-                className="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50"
-              >
-                {isLoadingHint ? (
-                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
-                ) : (
-                  'Get Hint'
-                )}
-              </button>
-            </div>
-            
-            <div className="overflow-y-auto max-h-[200px]">
-              {currentHint && (
-                <div className="bg-orange-50 rounded-lg p-4 inline-block w-auto max-w-full mb-4">
-                  <p className="text-gray-800">{currentHint}</p>
-                </div>
-              )}
-              
-              {!currentHint && !isLoadingHint && (
-                <div className="flex items-center justify-center text-gray-500">
-                  <p className="text-center">Click "Get Hint" to receive a suggestion for your next response</p>
-                </div>
-              )}
-            </div>
+          {/* Tab Headers */}
+          <div className="flex border-b border-orange-100">
+            <button
+              onClick={() => setActiveTab('feedback')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'feedback'
+                  ? 'text-orange-600 border-b-2 border-orange-600 bg-orange-50'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              Feedback
+            </button>
+            <button
+              onClick={() => setActiveTab('hints')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'hints'
+                  ? 'text-orange-600 border-b-2 border-orange-600 bg-orange-50'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              Hints
+            </button>
           </div>
-
-          {/* Feedback Section */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="p-4">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Feedback</h3>
+          
+          {/* Tab Content */}
+          <div className="flex-1 overflow-y-auto p-4">
+            {activeTab === 'feedback' ? (
               <FeedbackPanel
                 feedbacks={feedbacks}
                 onFeedbackClick={handleFeedbackClick}
               />
-            </div>
+            ) : (
+              <div className="space-y-4">
+                {currentHint ? (
+                  <div className="bg-orange-50 rounded-lg p-4 border border-orange-100">
+                    <h4 className="text-sm font-medium text-gray-800 mb-2">Latest Hint</h4>
+                    <p className="text-gray-700">{currentHint}</p>
+                  </div>
+                ) : (
+                  <div className="text-center text-gray-500 py-8">
+                    <p className="text-sm">No hints yet. Use the hint buttons to get suggestions!</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1362,21 +1384,159 @@ function ChatComponent() {
               <span className="text-orange-600 font-medium text-sm">Generating Report...</span>
             </div>
           ) : !isConversationActive ? (
-            /* Initial state - Mic button with label */
-            <div className="flex flex-col items-center space-y-2">
-              <button
-                onClick={handleStartRecording}
-                className="w-16 h-16 rounded-full bg-orange-500 hover:bg-orange-600 transition-all duration-200 flex items-center justify-center group shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
-              >
-                <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                </svg>
-              </button>
-              <span className="text-orange-600 font-medium text-sm">Start Chatting</span>
+            /* Initial state - Hint buttons and Mic button with label */
+            <div className="flex items-center space-x-6">
+              {/* Hint Buttons */}
+              <div className="flex items-center space-x-3">
+                {/* Generic Hint Button */}
+                <div className="flex flex-col items-center space-y-1">
+                  <button
+                    onClick={() => getHint()}
+                    disabled={isLoadingHint}
+                    className="w-10 h-10 rounded-full bg-orange-100 hover:bg-orange-200 transition-all duration-200 flex items-center justify-center border border-orange-300 shadow-sm hover:shadow-md"
+                    title="Get conversation hint"
+                  >
+                    {isLoadingHint ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-orange-500"></div>
+                    ) : (
+                      <svg className="w-5 h-5 text-orange-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                  <span className="text-orange-600 font-medium text-xs">Hint</span>
+                </div>
+                
+                {/* Translate Button and Input */}
+                <div className="flex flex-col items-center space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => setShowTranslateInput(!showTranslateInput)}
+                      className="w-10 h-10 rounded-full bg-orange-100 hover:bg-orange-200 transition-all duration-200 flex items-center justify-center border border-orange-300 shadow-sm hover:shadow-md"
+                      title="Translate phrase"
+                    >
+                      <svg className="w-5 h-5 text-orange-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M7 2a1 1 0 011 1v1h3a1 1 0 110 2H9.578a18.87 18.87 0 01-1.724 4.78c.29.354.596.696.914 1.026a1 1 0 11-1.44 1.389c-.188-.196-.373-.396-.554-.6a19.098 19.098 0 01-3.107 3.567 1 1 0 01-1.334-1.49 17.087 17.087 0 003.13-3.733 18.992 18.992 0 01-1.487-2.494 1 1 0 111.79-.89c.234.47.489.928.764 1.372.417-.934.752-1.913.997-2.927H3a1 1 0 110-2h3V3a1 1 0 011-1zm6 6a1 1 0 01.894.553l2.991 5.982a.869.869 0 01.02.037l.99 1.98a1 1 0 11-1.79.895L15.383 16h-4.764l-.724 1.447a1 1 0 11-1.788-.894l.99-1.98.019-.038 2.99-5.982A1 1 0 0113 8zm-1.382 6h2.764L13 11.236 11.618 14z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                    
+                    {showTranslateInput && (
+                      <div className="flex items-center space-x-2 bg-white border border-orange-300 rounded-lg px-3 py-2 shadow-sm">
+                        <p className="text-xs text-black mb-0">How do I say...?</p>
+                        <input
+                          type="text"
+                          value={customHintInput}
+                          onChange={(e) => setCustomHintInput(e.target.value)}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter' && !isLoadingHint && customHintInput.trim()) {
+                              getHint();
+                            }
+                          }}
+                          placeholder="Translate a phrase here"
+                          className="text-sm border-none bg-transparent focus:outline-none italic text-gray-600 placeholder-gray-400 w-48"
+                          disabled={isLoadingHint}
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => customHintInput.trim() && getHint()}
+                          disabled={isLoadingHint || !customHintInput.trim()}
+                          className="w-6 h-6 rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50 flex items-center justify-center"
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-orange-600 font-medium text-xs">Translate</span>
+                </div>
+              </div>
+              
+              {/* Start Button */}
+              <div className="flex flex-col items-center space-y-2">
+                <button
+                  onClick={handleStartRecording}
+                  className="w-16 h-16 rounded-full bg-orange-500 hover:bg-orange-600 transition-all duration-200 flex items-center justify-center group shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
+                >
+                  <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <span className="text-orange-600 font-medium text-sm">Start Chatting</span>
+              </div>
             </div>
           ) : (
-            /* Active conversation state - Mic mute button and Save button */
+            /* Active conversation state - Mic mute button, Hint buttons, and Save button */
             <div className="flex items-center space-x-6">
+              {/* Hint Buttons */}
+              <div className="flex items-center space-x-3">
+                {/* Generic Hint Button */}
+                <div className="flex flex-col items-center space-y-1">
+                  <button
+                    onClick={() => getHint()}
+                    disabled={isLoadingHint}
+                    className="w-10 h-10 rounded-full bg-orange-100 hover:bg-orange-200 transition-all duration-200 flex items-center justify-center border border-orange-300 shadow-sm hover:shadow-md"
+                    title="Get conversation hint"
+                  >
+                    {isLoadingHint ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-orange-500"></div>
+                    ) : (
+                      <svg className="w-5 h-5 text-orange-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                  <span className="text-orange-600 font-medium text-xs">Hint</span>
+                </div>
+                
+                {/* Translate Button and Input */}
+                <div className="flex flex-col items-center space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => setShowTranslateInput(!showTranslateInput)}
+                      className="w-10 h-10 rounded-full bg-orange-100 hover:bg-orange-200 transition-all duration-200 flex items-center justify-center border border-orange-300 shadow-sm hover:shadow-md"
+                      title="Translate phrase"
+                    >
+                      <svg className="w-5 h-5 text-orange-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M7 2a1 1 0 011 1v1h3a1 1 0 110 2H9.578a18.87 18.87 0 01-1.724 4.78c.29.354.596.696.914 1.026a1 1 0 11-1.44 1.389c-.188-.196-.373-.396-.554-.6a19.098 19.098 0 01-3.107 3.567 1 1 0 01-1.334-1.49 17.087 17.087 0 003.13-3.733 18.992 18.992 0 01-1.487-2.494 1 1 0 111.79-.89c.234.47.489.928.764 1.372.417-.934.752-1.913.997-2.927H3a1 1 0 110-2h3V3a1 1 0 011-1zm6 6a1 1 0 01.894.553l2.991 5.982a.869.869 0 01.02.037l.99 1.98a1 1 0 11-1.79.895L15.383 16h-4.764l-.724 1.447a1 1 0 11-1.788-.894l.99-1.98.019-.038 2.99-5.982A1 1 0 0113 8zm-1.382 6h2.764L13 11.236 11.618 14z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                    
+                    {showTranslateInput && (
+                      <div className="flex items-center space-x-2 bg-white border border-orange-300 rounded-lg px-3 py-2 shadow-sm">
+                        <p className="text-xs text-black mb-0">How do I say...?</p>
+                        <input
+                          type="text"
+                          value={customHintInput}
+                          onChange={(e) => setCustomHintInput(e.target.value)}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter' && !isLoadingHint && customHintInput.trim()) {
+                              getHint();
+                            }
+                          }}
+                          placeholder="Translate a phrase here"
+                          className="text-sm border-none bg-transparent focus:outline-none italic text-gray-600 placeholder-gray-400 w-48"
+                          disabled={isLoadingHint}
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => customHintInput.trim() && getHint()}
+                          disabled={isLoadingHint || !customHintInput.trim()}
+                          className="w-6 h-6 rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50 flex items-center justify-center"
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-orange-600 font-medium text-xs">Translate</span>
+                </div>
+              </div>
+              
+              {/* Mic Button */}
               <div className="flex flex-col items-center space-y-1">
                 <button
                   onClick={handleToggleMute}

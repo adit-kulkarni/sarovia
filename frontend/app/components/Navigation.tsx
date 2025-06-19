@@ -67,7 +67,7 @@ const Navigation = () => {
   return (
     <>
       {/* Desktop Navigation */}
-      <nav className="hidden md:flex fixed left-0 top-0 h-full w-64 bg-white border-r border-orange-100 flex-col">
+      <nav className="hidden md:flex fixed left-0 top-0 h-full w-48 bg-white border-r border-orange-100 flex-col">
         <div className="p-4 relative group">
           <div 
             className="cursor-pointer"

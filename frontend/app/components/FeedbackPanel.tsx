@@ -74,11 +74,15 @@ const loadFilters = (): FilterState => {
   
   // Default: everything selected
   const allCategories = new Set(Object.keys(FEEDBACK_CATEGORIES));
-  return {
+  const defaultFilters = {
     severities: new Set(SEVERITY_LEVELS),
     categories: allCategories,
     types: new Set(getAvailableTypes(allCategories))
   };
+  
+
+  
+  return defaultFilters;
 };
 
 // Helper function to filter feedback based on current filters
@@ -91,19 +95,6 @@ const filterFeedback = (feedbacks: Feedback[], filters: FilterState): Feedback[]
       const severityMatch = filters.severities.has(mistake.severity);
       const categoryMatch = filters.categories.has(mistake.category);
       const typeMatch = filters.types.has(mistake.type);
-      
-      // Debug logging
-      console.log('Filtering mistake:', {
-        mistake: mistake,
-        severityMatch,
-        categoryMatch, 
-        typeMatch,
-        filters: {
-          severities: Array.from(filters.severities),
-          categories: Array.from(filters.categories),
-          types: Array.from(filters.types)
-        }
-      });
       
       return severityMatch && categoryMatch && typeMatch;
     });
@@ -124,15 +115,7 @@ export default function FeedbackPanel({ feedbacks, onFeedbackClick }: FeedbackPa
   const [filters, setFilters] = useState<FilterState>(loadFilters);
   const [showFilters, setShowFilters] = useState(false);
 
-  // Debug: Log actual feedback data
-  useEffect(() => {
-    console.log('FeedbackPanel received feedbacks:', feedbacks);
-    feedbacks.forEach((feedback, index) => {
-      if (feedback.hasMistakes) {
-        console.log(`Feedback ${index} mistakes:`, feedback.mistakes);
-      }
-    });
-  }, [feedbacks]);
+
 
   // Auto-scroll to bottom when new feedback arrives
   useEffect(() => {
@@ -208,17 +191,10 @@ export default function FeedbackPanel({ feedbacks, onFeedbackClick }: FeedbackPa
 
   // Get feedbacks based on active tab
   const displayFeedbacks = activeTab === 'all' ? feedbacks : filterFeedback(feedbacks, filters);
+  
 
-  // Debug: Log filter state and results
-  useEffect(() => {
-    console.log('Current filters:', {
-      severities: Array.from(filters.severities),
-      categories: Array.from(filters.categories), 
-      types: Array.from(filters.types)
-    });
-    console.log('Filtered feedbacks count:', displayFeedbacks.length);
-    console.log('Original feedbacks count:', feedbacks.length);
-  }, [filters, feedbacks, displayFeedbacks]);
+
+
 
   return (
     <div className="flex flex-col h-full">
