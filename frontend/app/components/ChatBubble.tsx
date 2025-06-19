@@ -56,32 +56,40 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick, lang
     }
   };
 
-  // Build emoji indicators
-  let emojiIndicators: React.ReactNode = null;
+  // Build severity indicators
+  let severityIndicators: React.ReactNode = null;
   if (isUser && feedback) {
     if (!feedback.hasMistakes) {
-      emojiIndicators = (
+      severityIndicators = (
         <span className="text-green-600 text-lg mr-1">✅</span>
       );
     } else {
-      // Count mistakes by category
-      const categoryCounts: Record<string, number> = {};
+      // Count mistakes by severity
+      const severityCounts = { minor: 0, moderate: 0, critical: 0 };
       feedback.mistakes.forEach((m: Mistake) => {
-        const cat = m.category;
-        categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+        severityCounts[m.severity as keyof typeof severityCounts]++;
       });
-      emojiIndicators = (
+
+      // Color scheme matching Language Features chart
+      const severityStyles = {
+        minor: 'bg-yellow-200 text-yellow-800',     // rgba(255, 206, 86, 1) equivalent
+        moderate: 'bg-orange-200 text-orange-800',  // rgba(255, 159, 64, 1) equivalent  
+        critical: 'bg-red-200 text-red-800'         // rgba(255, 99, 132, 1) equivalent
+      };
+
+      severityIndicators = (
         <div className="flex space-x-1 items-center">
-          {Object.entries(categoryCounts).map(([cat, count]) => (
-            <span key={cat} className="relative text-lg">
-              {mistakeCategoryEmojis[cat] || '❓'}
-              {count > 1 && (
-                <span className="absolute -top-1 -right-2 bg-red-500 text-white text-xs rounded-full px-1 min-w-[16px] text-center">
-                  ×{count}
-                </span>
-              )}
-            </span>
-          ))}
+          {Object.entries(severityCounts).map(([severity, count]) => {
+            if (count === 0) return null;
+            return (
+              <span
+                key={severity}
+                className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${severityStyles[severity as keyof typeof severityStyles]}`}
+              >
+                {count}
+              </span>
+            );
+          })}
         </div>
       );
     }
@@ -89,10 +97,10 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick, lang
 
   return (
     <div className={`relative max-w-xl mb-2 ${isUser ? 'ml-auto' : 'mr-auto'}`}>
-      {/* Emoji indicators in top-left for user messages */}
+      {/* Severity indicators in top-left for user messages */}
       {isUser && feedback && (
         <div className="absolute -top-3 left-2 flex z-10">
-          {emojiIndicators}
+          {severityIndicators}
         </div>
       )}
       

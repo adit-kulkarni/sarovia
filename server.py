@@ -360,7 +360,8 @@ def get_feedback_categories(interaction_type: str = "audio") -> dict:
     }
     
     if interaction_type == "text":
-        # Add spelling and punctuation for text interactions
+        # Only add spelling and punctuation for text interactions
+        # For audio/voice interactions, we skip these categories to avoid penalizing transcription errors
         base_categories.update({
             "spelling": ["common spelling error", "homophone confusion", "other"],
             "punctuation": ["missing punctuation", "comma splice", "run-on sentence", 
@@ -945,6 +946,36 @@ Language feature tag guidelines:
         
         Message to analyze: "{original_message}"
         
+        🎙️ VOICE TRANSCRIPTION CONSIDERATIONS - CRITICAL:
+        This is a voice-based language learning app, so the text comes from speech transcription. Be very forgiving of:
+        
+        1. SPELLING ERRORS: Do NOT penalize spelling mistakes or typos - these are likely transcription errors, not language errors
+        2. MISSING ACCENTS: Do NOT penalize missing accent marks (á, é, í, ó, ú, ñ, etc.) - transcription often misses these
+        3. PUNCTUATION: Do NOT penalize missing or incorrect punctuation - focus only on spoken language errors
+        4. WORD REPETITIONS: If a user repeats a word (e.g., "yo yo voy"), this is often natural speech hesitation - only flag if it affects meaning
+        5. MINOR TRANSCRIPTION ARTIFACTS: Ignore "um", "uh", filler words, or slight transcription variations
+        
+        FOCUS ON: Grammar, vocabulary choice, syntax, sentence structure, and meaningful language use errors that indicate actual language learning needs.
+        
+        📊 SEVERITY ASSESSMENT GUIDELINES:
+        🔴 CRITICAL - Errors that significantly impede communication or indicate fundamental misunderstanding:
+        • Wrong verb tense in context (using past when present is needed)
+        • Major word meaning errors (saying "dead" instead of "tired")
+        • Sentence structure so broken it's incomprehensible
+        • Using wrong gender for core nouns repeatedly
+        
+        🟠 MODERATE - Errors that affect clarity but message is still understandable:
+        • Minor verb conjugation errors
+        • Incorrect articles (el/la confusion)
+        • Word order issues that change meaning slightly
+        • Inappropriate register (too formal/informal for context)
+        
+        🟡 MINOR - Errors that don't affect understanding but could be polished:
+        • Singular/plural agreement mistakes
+        • Missing or incorrect prepositions where meaning is clear
+        • Unnatural phrasing that's still comprehensible
+        • Small vocabulary improvements
+        
         If the message is perfect (no mistakes), return an empty mistakes array.
         If there are mistakes, provide feedback in the following JSON format:
         {{
@@ -967,7 +998,7 @@ Language feature tag guidelines:
         {tag_guidance}
         
         Important: If the message is perfect for the student's level, return an empty mistakes array.
-        Note: For audio interactions, focus on spoken language patterns and avoid feedback that would only apply to written text.
+        Remember: This is voice-based learning - prioritize meaningful language errors over transcription artifacts.
         """
         
         # Call OpenAI API using aiohttp
