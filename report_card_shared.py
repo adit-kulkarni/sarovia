@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import os
 from supabase import create_client
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
@@ -261,72 +262,239 @@ async def get_conversation_number(user_id: str, language: str, conversation_id: 
         logger.error(f"Error getting conversation number: {e}")
         return 0
 
-async def generate_report_card(
-    before_verbs: Optional[Dict] = None,
-    after_verbs: Optional[Dict] = None,
-    conversation_id: Optional[str] = None,
-    turns_completed: int = 0,
-    title: str = "Session",
-    duration_str: str = "Unknown",
-    existing_achievements: Optional[List[Dict]] = None,
-    user_id: Optional[str] = None,
-    language: Optional[str] = None
-) -> Dict:
+def clean_context_title(context: str, level: str = None) -> str:
     """
-    Generate a complete report card using shared modular functions.
+    Clean up context IDs to readable titles.
+    Shared function for both conversation and lesson summaries.
+    """
+    if not context:
+        return "Conversation Practice"
     
-    This function can be used by both lesson summaries and conversation summaries
-    to ensure consistency and avoid code duplication.
+    # If context looks like an ID (contains underscores and is long)
+    if '_' in context and len(context) > 20:
+        # Extract meaningful keywords from ID-like strings
+        # Remove user prefix and timestamp suffix
+        cleaned = re.sub(r'^user_[a-zA-Z0-9]+_', '', context)
+        cleaned = re.sub(r'_\d+$', '', cleaned)
+        
+        # Split on underscores and convert to title case
+        parts = cleaned.split('_')
+        meaningful_parts = []
+        
+        for part in parts:
+            if len(part) > 2 and not part.isdigit():
+                meaningful_parts.append(part.title())
+        
+        if meaningful_parts:
+            title = ' '.join(meaningful_parts)
+        else:
+            title = "Conversation Practice"
+    else:
+        title = context.title() if context else "Conversation Practice"
+    
+    # Add level if provided
+    if level:
+        title = f"{title} ({level})"
+    
+    return title
+
+async def get_conversation_data(conversation_id: str) -> Dict:
+    """
+    Fetch all necessary data for a conversation report card.
+    Returns standardized data structure.
     """
     try:
-        # Calculate verb achievements (or use existing ones)
-        if existing_achievements is not None:
-            achievements = existing_achievements[:]  # Copy the list
-        else:
-            achievements = []
-            if before_verbs is not None and after_verbs is not None:
-                achievements = calculate_verb_achievements(before_verbs, after_verbs, title)
+        supabase = get_supabase_client()
+        
+        # Get conversation details
+        conversation_result = supabase.table('conversations').select(
+            'context, level, language, created_at, user_id'
+        ).eq('id', conversation_id).execute()
+        
+        if not conversation_result.data:
+            raise ValueError(f"Conversation not found: {conversation_id}")
+        
+        conv_data = conversation_result.data[0]
+        context = conv_data['context']
+        level = conv_data['level']
+        
+        # Get message count (turns)
+        messages_result = supabase.table('messages').select(
+            'id, created_at', count='exact'
+        ).eq('conversation_id', conversation_id).eq('role', 'user').execute()
+        
+        turns_completed = messages_result.count or 0
+        
+        # Calculate duration
+        duration_str = "Unknown"
+        if messages_result.data:
+            # Get first and last message times
+            first_msg = min(messages_result.data, key=lambda x: x['created_at'])
+            last_msg = max(messages_result.data, key=lambda x: x['created_at'])
+            
+            start_time = parse_datetime_safe(first_msg['created_at'])
+            end_time = parse_datetime_safe(last_msg['created_at'])
+            duration_minutes = max(1, int((end_time - start_time).total_seconds() / 60))
+            duration_str = f"{duration_minutes}m {int((end_time - start_time).total_seconds() % 60)}s"
+        
+        # Check if this context is a personalized context with a real title
+        title = "Conversation Practice"
+        if context:
+            personalized_context_result = supabase.table('personalized_contexts').select('title').eq('id', context).execute()
+            if personalized_context_result.data:
+                # Use the actual personalized context title
+                title = personalized_context_result.data[0].get('title', 'Conversation Practice')
+                if level:
+                    title = f"{title} ({level})"
+            else:
+                # Fall back to context cleanup
+                title = clean_context_title(context, level)
+        
+        return {
+            'conversation_id': conversation_id,
+            'title': title,
+            'turns_completed': turns_completed,
+            'duration_str': duration_str,
+            'user_id': conv_data['user_id'],
+            'language': conv_data['language'],
+            'level': conv_data['level'],
+            'context': conv_data['context']
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching conversation data: {e}")
+        raise
+
+async def get_lesson_data(lesson_progress_id: str) -> Dict:
+    """
+    Fetch all necessary data for a lesson report card.
+    Returns standardized data structure.
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get lesson progress details
+        lesson_result = supabase.table('lesson_progress').select(
+            'id, lesson_id, turns_completed, required_turns, completed_at, conversation_id, user_id, curriculum_id'
+        ).eq('id', lesson_progress_id).execute()
+        
+        if not lesson_result.data:
+            raise ValueError(f"Lesson progress not found: {lesson_progress_id}")
+        
+        lesson_data = lesson_result.data[0]
+        conversation_id = lesson_data.get('conversation_id')
+        
+        # Try to get title from lesson template first
+        title = "Unknown Lesson"
+        level = None
+        language = None
+        context = None
+        
+        if lesson_data.get('lesson_id'):
+            lesson_template_result = supabase.table('lesson_templates').select('title, objectives').eq('id', lesson_data['lesson_id']).execute()
+            if lesson_template_result.data:
+                title = lesson_template_result.data[0].get('title', 'Unknown Lesson')
+        
+        # Get language and level from curriculum
+        if lesson_data.get('curriculum_id'):
+            curriculum_result = supabase.table('curriculums').select('language').eq('id', lesson_data['curriculum_id']).execute()
+            if curriculum_result.data:
+                language = curriculum_result.data[0].get('language')
+        
+        # If no lesson template found, get conversation details and check for personalized contexts
+        if title == "Unknown Lesson" and conversation_id:
+            conversation_result = supabase.table('conversations').select('context, level').eq('id', conversation_id).execute()
+            if conversation_result.data:
+                context = conversation_result.data[0].get('context')
+                level = conversation_result.data[0].get('level')
+                
+                # Check if this context is a personalized context with a real title
+                if context:
+                    personalized_context_result = supabase.table('personalized_contexts').select('title').eq('id', context).execute()
+                    if personalized_context_result.data:
+                        # Use the actual personalized context title
+                        title = personalized_context_result.data[0].get('title', 'Unknown Lesson')
+                        if level:
+                            title = f"{title} ({level})"
+                    else:
+                        # Fall back to context cleanup
+                        title = clean_context_title(context, level)
+        
+        # Calculate duration
+        duration_str = "Unknown"
+        if conversation_id and lesson_data.get('completed_at'):
+            conversation_result = supabase.table('conversations').select('created_at').eq('id', conversation_id).execute()
+            if conversation_result.data:
+                start_time = parse_datetime_safe(conversation_result.data[0]['created_at'])
+                end_time = parse_datetime_safe(lesson_data['completed_at'])
+                duration_minutes = int((end_time - start_time).total_seconds() / 60)
+                duration_str = f"{duration_minutes} minutes"
+        
+        return {
+            'conversation_id': conversation_id,
+            'title': title,
+            'turns_completed': lesson_data.get('turns_completed', 0),
+            'duration_str': duration_str,
+            'user_id': lesson_data.get('user_id'),
+            'language': language,
+            'level': level,
+            'lesson_progress_id': lesson_progress_id,
+            'curriculum_id': lesson_data.get('curriculum_id')
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching lesson data: {e}")
+        raise
+
+async def generate_unified_report_card(data: Dict, before_verbs: Optional[Dict] = None, after_verbs: Optional[Dict] = None) -> Dict:
+    """
+    Unified report card generator that works for both conversations and lessons.
+    Takes standardized data structure and generates consistent report cards.
+    """
+    try:
+        # Calculate verb achievements
+        achievements = []
+        if before_verbs is not None and after_verbs is not None:
+            achievements = calculate_verb_achievements(before_verbs, after_verbs, data['title'])
         
         # Add engagement achievement for conversations with sufficient turns
-        if turns_completed >= 5:
+        if data['turns_completed'] >= 5:
             achievements.append({
                 "id": "conversation_engagement",
                 "title": f"Great Conversation!",
-                "description": f"You engaged in {turns_completed} turns of conversation practice.",
+                "description": f"You engaged in {data['turns_completed']} turns of conversation practice.",
                 "icon": "💬",
                 "type": "engagement",
-                "value": turns_completed
+                "value": data['turns_completed']
             })
         
         # Get mistake analysis
-        mistake_data = await get_conversation_mistakes(conversation_id) if conversation_id else {"total_mistakes": 0, "mistakes_by_category": []}
-        
-
+        mistake_data = await get_conversation_mistakes(data['conversation_id']) if data.get('conversation_id') else {"total_mistakes": 0, "mistakes_by_category": []}
         
         # Generate improvement areas
         improvement_areas = generate_improvement_areas(mistake_data['mistakes_by_category'])
         
         # Calculate words used
-        words_used = estimate_words_used(turns_completed)
+        words_used = estimate_words_used(data['turns_completed'])
         
-        # Get conversation number if user_id, language, and conversation_id are provided
+        # Get conversation number if we have the required data
         conversation_number = 0
-        if user_id and language and conversation_id:
-            conversation_number = await get_conversation_number(user_id, language, conversation_id)
+        if data.get('user_id') and data.get('language') and data.get('conversation_id'):
+            conversation_number = await get_conversation_number(data['user_id'], data['language'], data['conversation_id'])
         
         return {
-            "lessonTitle": title,
-            "totalTurns": turns_completed,
+            "lessonTitle": data['title'],
+            "totalTurns": data['turns_completed'],
             "totalMistakes": mistake_data['total_mistakes'],
             "achievements": achievements,
             "mistakesByCategory": mistake_data['mistakes_by_category'],
-            "conversationDuration": duration_str,
+            "conversationDuration": data['duration_str'],
             "wordsUsed": words_used,
             "conversationCount": conversation_number,
             "improvementAreas": improvement_areas,
-            "conversationId": conversation_id
+            "conversationId": data.get('conversation_id')
         }
         
     except Exception as e:
-        logger.error(f"Error generating report card: {e}")
+        logger.error(f"Error generating unified report card: {e}")
         raise 

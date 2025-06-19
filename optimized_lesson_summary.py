@@ -63,10 +63,6 @@ def parse_datetime_safe(datetime_str):
             logger.warning(f"Failed to parse datetime '{datetime_str}', using current time")
             return datetime.now(timezone.utc)
 
-
-
-
-
 async def get_verb_snapshots_for_lesson(lesson_progress_id: str) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
     Get before/after verb knowledge snapshots for a lesson.
@@ -116,124 +112,25 @@ async def generate_optimized_lesson_summary(lesson_progress_id: str) -> Dict:
     re-analyzing conversations with OpenAI.
     """
     try:
-        supabase = get_supabase_client()
+        # Use the new unified data fetcher
+        from report_card_shared import get_lesson_data, generate_unified_report_card
         
-        # Get lesson progress details (without foreign key joins that don't exist)
-        lesson_result = supabase.table('lesson_progress').select(
-            'id, lesson_id, turns_completed, required_turns, completed_at, conversation_id, user_id, curriculum_id'
-        ).eq('id', lesson_progress_id).execute()
-        
-        if not lesson_result.data:
-            raise ValueError(f"Lesson progress not found: {lesson_progress_id}")
-        
-        lesson_data = lesson_result.data[0]
-        lesson_id = lesson_data.get('lesson_id')
-        conversation_id = lesson_data.get('conversation_id')
-        turns_completed = lesson_data.get('turns_completed', 0)
-        required_turns = lesson_data.get('required_turns', 7)
-        user_id = lesson_data.get('user_id')
-        curriculum_id = lesson_data.get('curriculum_id')
-        
-        # Debug logging
-        logger.info(f"[Lesson Summary] Progress ID: {lesson_progress_id}")
-        logger.info(f"[Lesson Summary] Lesson ID: {lesson_id}")
-        logger.info(f"[Lesson Summary] Conversation ID: {conversation_id}")
-        logger.info(f"[Lesson Summary] Turns completed: {turns_completed}")
-        
-        # Get lesson title separately
-        lesson_title = "Unknown Lesson"
-        if lesson_id:
-            lesson_template_result = supabase.table('lesson_templates').select('title, objectives').eq('id', lesson_id).execute()
-            if lesson_template_result.data:
-                lesson_title = lesson_template_result.data[0].get('title', 'Unknown Lesson')
-        
-        # Get language from curriculum
-        language = None
-        if curriculum_id:
-            curriculum_result = supabase.table('curriculums').select('language').eq('id', curriculum_id).execute()
-            if curriculum_result.data:
-                language = curriculum_result.data[0].get('language')
-        
-        # Calculate conversation duration
-        conversation_duration = "Unknown"
-        if conversation_id and lesson_data.get('completed_at'):
-            conversation_result = supabase.table('conversations').select('created_at').eq('id', conversation_id).execute()
-            if conversation_result.data:
-                start_time = parse_datetime_safe(conversation_result.data[0]['created_at'])
-                end_time = parse_datetime_safe(lesson_data['completed_at'])
-                duration_minutes = int((end_time - start_time).total_seconds() / 60)
-                conversation_duration = f"{duration_minutes} minutes"
+        # Fetch standardized lesson data
+        lesson_data = await get_lesson_data(lesson_progress_id)
         
         # Get verb knowledge snapshots for before/after comparison
         before_verbs, after_verbs = await get_verb_snapshots_for_lesson(lesson_progress_id)
         
-        # Generate verb-based achievements using shared function
-        from report_card_shared import calculate_verb_achievements
-        achievements = []
-        if before_verbs is not None and after_verbs is not None:
-            achievements = calculate_verb_achievements(before_verbs, after_verbs, lesson_title)
-        else:
-            # Fallback achievements if snapshots are missing
-            achievements = [
-                {
-                    "id": "lesson_completed",
-                    "title": "Lesson Completed!",
-                    "description": f"You successfully completed '{lesson_title}' with {turns_completed} conversation turns.",
-                    "icon": "✅",
-                    "type": "milestone",
-                    "value": turns_completed
-                }
-            ]
+        # Generate the unified report card
+        summary = await generate_unified_report_card(lesson_data, before_verbs, after_verbs)
         
-        # Get mistake data from message_feedback using shared function
-        from report_card_shared import get_conversation_mistakes
-        mistake_data = await get_conversation_mistakes(conversation_id)
-        
-        # Use the shared report card generator for consistency
-        try:
-            from report_card_shared import generate_report_card
-            
-            summary = await generate_report_card(
-                before_verbs=before_verbs,
-                after_verbs=after_verbs,
-                conversation_id=conversation_id,
-                turns_completed=turns_completed,
-                title=lesson_title,
-                duration_str=conversation_duration,
-                existing_achievements=achievements,
-                user_id=user_id,
-                language=language
-            )
-            
-        except Exception as e:
-            logger.error(f"Could not generate report card using shared function: {e}")
-            
-            # Fallback to the old method
-            from report_card_shared import estimate_words_used, generate_improvement_areas
-            summary = {
-                "lessonTitle": lesson_title,
-                "totalTurns": turns_completed,
-                "totalMistakes": mistake_data['total_mistakes'],
-                "achievements": achievements,
-                "mistakesByCategory": mistake_data['mistakes_by_category'],
-                "conversationDuration": conversation_duration,
-                "wordsUsed": estimate_words_used(turns_completed),
-                "conversationCount": 0,  # Will be 0 in fallback case
-                "improvementAreas": generate_improvement_areas(mistake_data['mistakes_by_category']),
-                "conversationId": conversation_id
-            }
-        
-        logger.info(f"Generated optimized lesson summary for {lesson_title} in <1 second!")
-        logger.info(f"[Lesson Summary] Response includes conversationId: {conversation_id}")
+        logger.info(f"Generated optimized lesson summary for '{lesson_data['title']}' in <1 second!")
+        logger.info(f"[Lesson Summary] Response includes conversationId: {lesson_data.get('conversation_id')}")
         return summary
         
     except Exception as e:
         logger.error(f"Error generating optimized lesson summary: {e}")
         raise
-
-
-
-
 
 # Function to be called from server.py
 async def get_lesson_summary_optimized(lesson_progress_id: str) -> Dict:

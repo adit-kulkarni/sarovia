@@ -35,6 +35,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
 function ChatComponent() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isConversationActive, setIsConversationActive] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -704,7 +707,64 @@ function ChatComponent() {
   // Step 3: User clicks 'Start Recording' for mic access
   const handleStartRecording = async () => {
     setIsMicPrompted(true);
+    setIsConversationActive(true);
     await startRecording();
+  };
+
+  const handleToggleMute = async () => {
+    if (isMuted) {
+      // Unmute - resume recording
+      setIsMuted(false);
+      setIsRecording(true);
+      // Resume the audio context
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+    } else {
+      // Mute - pause recording
+      setIsMuted(true);
+      setIsRecording(false);
+      // Suspend the current audio processing but keep connection alive
+      if (audioContextRef.current && audioContextRef.current.state === 'running') {
+        await audioContextRef.current.suspend();
+      }
+    }
+  };
+
+  const handleSaveConversation = async () => {
+    // Set saving state
+    setIsSaving(true);
+    
+    // Stop recording
+    setIsRecording(false);
+    setIsMuted(false);
+    
+    // Stop audio playback
+    stopAudioPlayback();
+    
+    // Close audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    
+    // Close WebSocket connection
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    // Trigger the completion/report generation
+    try {
+      if (isLessonConversation) {
+        await handleCompleteLesson();
+      } else {
+        await handleCompleteConversation();
+      }
+    } finally {
+      setIsSaving(false);
+      setIsConversationActive(false);
+    }
   };
 
   const startRecording = async () => {
@@ -714,17 +774,21 @@ function ChatComponent() {
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // If stream doesn't exist, get it
+      if (!streamRef.current) {
+        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       
       // Create audio source from the stream
-      const source = audioContextRef.current?.createMediaStreamSource(stream);
+      const source = audioContextRef.current?.createMediaStreamSource(streamRef.current);
       
       // Create a script processor to handle the audio data
       const processor = audioContextRef.current?.createScriptProcessor(1024, 1, 1);
       
       if (processor) {
         processor.onaudioprocess = (e) => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                      if (wsRef.current?.readyState === WebSocket.OPEN && !isMuted) {
             // Get the audio data
             const inputData = e.inputBuffer.getChannelData(0);
             
@@ -760,32 +824,29 @@ function ChatComponent() {
       }
 
       setIsRecording(true);
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'Started recording',
-        timestamp: new Date().toISOString()
-      }]);
+      setIsMuted(false);
     } catch (error) {
       console.error('Error starting recording:', error);
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Error starting recording: ${error}`,
-        timestamp: new Date().toISOString()
-      }]);
+      setError(`Error starting recording: ${error}`);
     }
   };
 
   const stopRecording = () => {
+    setIsRecording(false);
+    setIsMuted(false);
+    setIsConversationActive(false);
+    
+    // Clean up audio context
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
-    setIsRecording(false);
-    setMessages(prev => [...prev, {
-      role: 'assistant',
-      content: 'Stopped recording',
-      timestamp: new Date().toISOString()
-    }]);
+    
+    // Clean up stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
   };
 
   const handleLogout = async () => {
@@ -1198,11 +1259,23 @@ function ChatComponent() {
                 )}
               </div>
             )}
-            <div className="flex items-center space-x-2">
-              <span className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-              <span className="text-sm text-gray-600">
-                {isConnected ? 'Connected' : 'Disconnected'}
-              </span>
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
+                <div className="relative">
+                  <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-orange-600" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <span className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium text-gray-800">AI Teacher</span>
+                  <span className="text-xs text-gray-500">
+                    {isConnected ? 'Online' : 'Offline'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1280,68 +1353,75 @@ function ChatComponent() {
       {/* Controls */}
       <div className="bg-white/80 backdrop-blur-sm border-t border-orange-100 p-4">
         <div className="max-w-6xl mx-auto flex justify-center items-center space-x-4">
-          {!isRecording ? (
-            <button
-              onClick={handleStartRecording}
-              className="w-14 h-14 rounded-full bg-gray-100 hover:bg-gray-200 border-2 border-gray-300 transition-colors flex items-center justify-center group"
-            >
-              <div className="w-0 h-0 border-l-[12px] border-l-orange-500 border-t-[8px] border-t-transparent border-b-[8px] border-b-transparent ml-1 group-hover:border-l-orange-600"></div>
-            </button>
+          {isSaving ? (
+            /* Saving state - Loading indicator */
+            <div className="flex flex-col items-center space-y-2">
+              <div className="w-16 h-16 rounded-full bg-orange-500 flex items-center justify-center shadow-lg">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white"></div>
+              </div>
+              <span className="text-orange-600 font-medium text-sm">Generating Report...</span>
+            </div>
+          ) : !isConversationActive ? (
+            /* Initial state - Mic button with label */
+            <div className="flex flex-col items-center space-y-2">
+              <button
+                onClick={handleStartRecording}
+                className="w-16 h-16 rounded-full bg-orange-500 hover:bg-orange-600 transition-all duration-200 flex items-center justify-center group shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
+              >
+                <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <span className="text-orange-600 font-medium text-sm">Start Chatting</span>
+            </div>
           ) : (
-            <button
-              onClick={stopRecording}
-              className="w-14 h-14 rounded-full bg-gray-100 hover:bg-gray-200 border-2 border-gray-300 transition-colors flex items-center justify-center"
-            >
-              <div className="w-3 h-3 bg-orange-500 rounded-sm"></div>
-            </button>
-          )}
-          
-          {/* Lesson Completion Button - Only show when lesson can be completed */}
-          {isLessonConversation && lessonProgress?.can_complete && (
-            <button
-              onClick={handleCompleteLesson}
-              disabled={isCompletingLesson}
-              className="px-8 py-3 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
-            >
-              {isCompletingLesson ? (
-                <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
-                  Completing...
-                </div>
-              ) : (
-                <div className="flex items-center">
-                  <span className="mr-2">✅</span>
-                  Complete Lesson
-                </div>
-              )}
-            </button>
-          )}
-
-          {/* End Conversation Button - Only show for non-lesson conversations */}
-          {!isLessonConversation && conversation_id && (
-            <button
-              onClick={handleCompleteConversation}
-              disabled={isCompletingConversation}
-              className="px-8 py-3 rounded-full bg-red-500 hover:bg-red-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
-            >
-              {isCompletingConversation ? (
-                <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
-                  Ending...
-                </div>
-              ) : (
-                <div className="flex items-center">
-                  <span className="mr-2">🏁</span>
-                  End Conversation
-                </div>
-              )}
-            </button>
+            /* Active conversation state - Mic mute button and Save button */
+            <div className="flex items-center space-x-6">
+              <div className="flex flex-col items-center space-y-1">
+                <button
+                  onClick={handleToggleMute}
+                  className="w-14 h-14 rounded-full bg-orange-500 hover:bg-orange-600 transition-all duration-200 flex items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
+                >
+                  {isMuted ? (
+                    /* Mic off icon */
+                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM12.293 7.293a1 1 0 011.414 0L15 8.586l1.293-1.293a1 1 0 111.414 1.414L16.414 10l1.293 1.293a1 1 0 01-1.414 1.414L15 11.414l-1.293 1.293a1 1 0 01-1.414-1.414L13.586 10l-1.293-1.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    /* Mic on icon */
+                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                </button>
+                <span className="text-orange-600 font-medium text-xs">
+                  {isMuted ? 'Unmute' : 'Mute'}
+                </span>
+              </div>
+              
+              <div className="flex flex-col items-center space-y-1">
+                <button
+                  onClick={handleSaveConversation}
+                  disabled={isCompletingLesson || isCompletingConversation}
+                  className="w-14 h-14 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex items-center justify-center"
+                >
+                  {(isCompletingLesson || isCompletingConversation) ? (
+                    <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                  ) : (
+                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6a1 1 0 10-2 0v5.586l-1.293-1.293zM5 4a2 2 0 012-2h6a2 2 0 012 2v1a1 1 0 11-2 0V4H7v1a1 1 0 11-2 0V4zm0 4a1 1 0 000 2v6a2 2 0 002 2h6a2 2 0 002-2v-6a1 1 0 100-2H5z"/>
+                    </svg>
+                  )}
+                </button>
+                <span className="text-orange-600 font-medium text-xs">Save</span>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Error Message */}
-      {error && (
+      {/* Error Message - Hidden for now */}
+      {false && error && (
         <div className="fixed bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
           {error}
         </div>

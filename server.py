@@ -5326,7 +5326,7 @@ async def complete_conversation(
 
 @app.get("/api/conversations/{conversation_id}/summary")
 async def get_conversation_summary(conversation_id: str, token: str = Query(...)):
-    """Generate a conversation summary/report card"""
+    """Generate a conversation summary/report card using unified modular approach"""
     try:
         # Handle JWT verification separately to return proper 401 errors
         try:
@@ -5347,94 +5347,34 @@ async def get_conversation_summary(conversation_id: str, token: str = Query(...)
             logging.error(f"[Conversation Summary] Conversation not found for id: {conversation_id}")
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        conversation = conv_result.data[0]
-        language = conversation['language']
-        context = conversation['context']
-        level = conversation['level']
-        curriculum_id = conversation.get('curriculum_id')
+        # Use the new unified data fetcher and report card generator
+        from report_card_shared import get_conversation_data, generate_unified_report_card
         
-        # Get conversation messages to count turns
-        messages_result = supabase.table('messages').select('id, role, content, created_at').eq('conversation_id', conversation_id).order('created_at').execute()
-        messages = messages_result.data if messages_result.data else []
+        # Fetch standardized conversation data
+        conversation_data = await get_conversation_data(conversation_id)
         
-        # Count turns (user messages only)
-        user_messages = [m for m in messages if m['role'] == 'user']
-        total_turns = len(user_messages)
+        # Get verb knowledge snapshots for before/after comparison
+        before_snapshot = None
+        after_snapshot = None
         
-        # Calculate conversation duration
-        if messages:
-            start_time = parse_datetime_safe_achievements(messages[0]['created_at'])
-            end_time = parse_datetime_safe_achievements(messages[-1]['created_at'])
-            duration = end_time - start_time
-            duration_str = f"{duration.seconds // 60}m {duration.seconds % 60}s"
-        else:
-            duration_str = "0m 0s"
-        
-        # Get conversation achievements and verb progress
-        achievements = []
-        
-        # Use shared function for word estimation
-        from report_card_shared import estimate_words_used
-        total_words = estimate_words_used(total_turns)
-        
+        curriculum_id = conv_result.data[0].get('curriculum_id')
         if curriculum_id:
-            # Get verb knowledge snapshots for before/after comparison
             try:
-                # Find snapshot before this conversation
-                before_snapshot = None
-                after_snapshot = None
-                
-                snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', language).eq('conversation_id', conversation_id).execute()
+                # Find snapshot for this conversation
+                snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', conversation_data['language']).eq('conversation_id', conversation_id).execute()
                 if snapshot_result.data:
                     after_snapshot = snapshot_result.data[0].get('verb_knowledge', {})
                 
                 # Try to find a previous snapshot for comparison
-                prev_snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', language).neq('conversation_id', conversation_id).order('created_at', desc=True).limit(1).execute()
+                prev_snapshot_result = supabase.table('verb_knowledge_snapshots').select('*').eq('user_id', user_id).eq('language', conversation_data['language']).neq('conversation_id', conversation_id).order('created_at', desc=True).limit(1).execute()
                 if prev_snapshot_result.data:
                     before_snapshot = prev_snapshot_result.data[0].get('verb_knowledge', {})
                 
-                # Generate verb-based achievements
-                if before_snapshot and after_snapshot:
-                    from report_card_shared import calculate_verb_achievements
-                    verb_achievements = calculate_verb_achievements(before_snapshot, after_snapshot, f"Conversation: {context}")
-                    achievements.extend(verb_achievements)
-                
             except Exception as e:
-                logging.warning(f"Could not generate verb achievements for conversation {conversation_id}: {e}")
+                logging.warning(f"Could not get verb snapshots for conversation {conversation_id}: {e}")
         
-        # Use the shared report card generator for consistency
-        try:
-            from report_card_shared import generate_report_card
-            
-            summary_data = await generate_report_card(
-                before_verbs=before_snapshot,
-                after_verbs=after_snapshot,
-                conversation_id=conversation_id,
-                turns_completed=total_turns,
-                title=f"{context} ({level})",
-                duration_str=duration_str,
-                user_id=user_id,
-                language=language
-            )
-            
-        except Exception as e:
-            logging.warning(f"Could not generate report card using shared function: {e}")
-            import traceback
-            logging.warning(f"Report card generation traceback: {traceback.format_exc()}")
-            
-            # Fallback to basic summary data
-            summary_data = {
-                "lessonTitle": f"{context} ({level})",
-                "totalTurns": total_turns,
-                "totalMistakes": 0,
-                "achievements": achievements,
-                "mistakesByCategory": [],
-                "conversationDuration": duration_str,
-                "wordsUsed": total_words,
-                "conversationCount": 0,
-                "improvementAreas": ["Keep practicing conversation skills!"],
-                "conversationId": conversation_id
-            }
+        # Generate the unified report card
+        summary_data = await generate_unified_report_card(conversation_data, before_snapshot, after_snapshot)
         
         logging.info(f"[Conversation Summary] Generated summary with {len(summary_data.get('achievements', []))} achievements and {summary_data.get('totalMistakes', 0)} mistakes")
         
