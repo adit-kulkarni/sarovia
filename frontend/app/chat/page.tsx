@@ -96,6 +96,27 @@ function ChatComponent() {
     }
   };
 
+  // Function to check if user has curriculums/language paths
+  const checkUserCurriculums = async (token: string) => {
+    try {
+      setCurriculumsLoading(true);
+      const response = await fetch(`${API_BASE}/api/curriculums?token=${token}`);
+      if (response.ok) {
+        const curriculums = await response.json();
+        setHasCurriculums(curriculums.length > 0);
+        console.log('[Curriculum Check] User has curriculums:', curriculums.length > 0);
+      } else {
+        setHasCurriculums(false);
+        console.log('[Curriculum Check] Failed to fetch curriculums');
+      }
+    } catch (error) {
+      console.error('[Curriculum Check] Error checking curriculums:', error);
+      setHasCurriculums(false);
+    } finally {
+      setCurriculumsLoading(false);
+    }
+  };
+
   // Debug state changes
   useEffect(() => {
     console.log('[Chat] State change - conversationStarted:', conversationStarted);
@@ -122,6 +143,10 @@ function ChatComponent() {
   
   // Token state for API calls
   const [token, setToken] = useState<string | null>(null);
+  
+  // Add state to track if user has language paths
+  const [hasCurriculums, setHasCurriculums] = useState<boolean | null>(null);
+  const [curriculumsLoading, setCurriculumsLoading] = useState(false);
   
   // VAD Settings States
   const [vadSettings, setVadSettings] = useState<VADSettings>({ type: 'semantic', eagerness: 'low' });
@@ -171,6 +196,9 @@ function ChatComponent() {
         
         // Set token for API calls
         setToken(session.access_token);
+        
+        // Check if user has curriculums/language paths
+        await checkUserCurriculums(session.access_token);
         
         // Load personalized context titles
         await loadPersonalizedContextTitles(session.access_token);
@@ -1113,6 +1141,39 @@ function ChatComponent() {
 
   // UI rendering logic
   if (!conversationStarted) {
+    // Show loading state while checking curriculums
+    if (hasCurriculums === null || curriculumsLoading) {
+      return (
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
+          <span className="ml-4 text-orange-600 font-semibold">Checking your language paths...</span>
+        </div>
+      );
+    }
+
+    // Show no curriculums message
+    if (!hasCurriculums) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen">
+          <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center max-w-lg w-full mx-4 text-center">
+            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mb-6">
+              <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Set up your language path first</h2>
+            <p className="mb-6 text-gray-600">Before you can start conversations, you need to create a language learning path. This helps us personalize your experience and track your progress.</p>
+            <button
+              onClick={() => router.push('/')}
+              className="px-6 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+            >
+              Create Language Path
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
         <div className="bg-white/80 rounded-xl shadow-lg p-8 flex flex-col items-center max-w-lg w-full mx-4">
@@ -1195,7 +1256,12 @@ function ChatComponent() {
           
           <button
             onClick={handleStartConversation}
-            className="px-8 py-3 rounded-full text-white font-medium bg-orange-500 hover:bg-orange-600 transition-colors"
+            disabled={!hasCurriculums}
+            className={`px-8 py-3 rounded-full text-white font-medium transition-colors ${
+              !hasCurriculums 
+                ? 'bg-gray-400 cursor-not-allowed' 
+                : 'bg-orange-500 hover:bg-orange-600'
+            }`}
           >
             Start Conversation
           </button>
