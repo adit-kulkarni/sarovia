@@ -51,6 +51,7 @@ export interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  isPlaceholder?: boolean; // For showing loading dots while waiting for transcript
   feedback?: Feedback; // Optional feedback info
 }
 

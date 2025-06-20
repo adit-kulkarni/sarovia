@@ -15,6 +15,22 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick, lang
   // Only show emoji indicators for user messages with feedback
   const feedback = message.feedback;
   const isUser = message.role === 'user';
+  
+  // Helper function to render content (including loading dots for placeholders)
+  const renderContent = () => {
+    if (message.isPlaceholder || (isUser && message.content === '')) {
+      return (
+        <div className="flex items-center space-x-1">
+          <div className="flex space-x-1">
+            <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+            <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+            <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+          </div>
+        </div>
+      );
+    }
+    return <span className="block whitespace-pre-line">{message.content}</span>;
+  };
 
   // Check if text is in a non-English language (should be translated)
   const shouldTranslate = (text: string, lang: string): boolean => {
@@ -138,10 +154,10 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick, lang
         onClick={hasFeedback ? onFeedbackClick : undefined}
         style={{ cursor: hasFeedback ? 'pointer' : 'default' }}
       >
-        <span className="block whitespace-pre-line">{message.content}</span>
+        {renderContent()}
         
         {/* Translation display */}
-        {showTranslation && translation && (
+        {showTranslation && translation && !message.isPlaceholder && (
           <div className={`mt-2 pt-2 border-t ${isUser ? 'border-orange-300' : 'border-gray-300'} text-sm opacity-80`}>
             {translation}
           </div>

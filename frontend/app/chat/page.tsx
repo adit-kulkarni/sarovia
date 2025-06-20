@@ -162,6 +162,9 @@ function ChatComponent() {
   
   // VAD Settings States
   const [vadSettings, setVadSettings] = useState<VADSettings>({ type: 'semantic', eagerness: 'low' });
+  
+  // Bubble session management
+  const [bubbleSessions, setBubbleSessions] = useState<{[key: string]: any}>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -599,25 +602,75 @@ function ChatComponent() {
             });
           }
           switch (data.type) {
-            case 'conversation.item.input_audio_transcription.completed': {
-              if (!data.message_id) {
-                // Ignore events without a valid message_id
-                return;
-              }
-              console.log('Handler fired for message_id:', data.message_id, 'transcript:', data.transcript);
-              setMessages(prev => {
-                if (prev.some(msg => msg.id === data.message_id && msg.role === 'user')) {
-                  return prev;
+            case 'bubble.session.created': {
+              // Stop AI audio playback when user audio is committed
+              stopAudioPlayback();
+              
+              // Create placeholder message for new bubble session
+              const placeholderMessage: Message = {
+                id: data.message_id,
+                role: 'user',
+                content: '', // Empty content initially
+                timestamp: new Date().toISOString(),
+                isPlaceholder: true
+              };
+              
+              setMessages(prev => [...prev, placeholderMessage]);
+              
+              // Track bubble session
+              setBubbleSessions(prev => ({
+                ...prev,
+                [data.bubble_id]: {
+                  bubble_id: data.bubble_id,
+                  message_id: data.message_id,
+                  expected_items: [data.item_id],
+                  item_order: [data.item_id],
+                  received_transcripts: {}
                 }
-                const newMsg: Message = {
-                  id: data.message_id,
-                  role: 'user',
-                  content: data.transcript,
-                  timestamp: new Date().toISOString()
-                };
-                console.log('Adding user message with id:', newMsg.id);
-                return [...prev, newMsg];
-              });
+              }));
+              
+              console.log('Created bubble session:', data.bubble_id, 'for item:', data.item_id);
+              break;
+            }
+            case 'bubble.session.extended': {
+              // Update bubble session with new item
+              setBubbleSessions(prev => ({
+                ...prev,
+                [data.bubble_id]: {
+                  ...prev[data.bubble_id],
+                  expected_items: [...(prev[data.bubble_id]?.expected_items || []), data.item_id],
+                  item_order: data.item_order
+                }
+              }));
+              
+              console.log('Extended bubble session:', data.bubble_id, 'with item:', data.item_id, 'order:', data.item_order);
+              break;
+            }
+            case 'bubble.content.updated': {
+              // Update message content with ordered transcript
+              setMessages(prev => prev.map(msg => 
+                msg.id === data.message_id 
+                  ? { 
+                      ...msg, 
+                      content: data.ordered_content,
+                      isPlaceholder: false
+                    }
+                  : msg
+              ));
+              
+              // Update bubble session with received transcript
+              setBubbleSessions(prev => ({
+                ...prev,
+                [data.bubble_id]: {
+                  ...prev[data.bubble_id],
+                  received_transcripts: {
+                    ...prev[data.bubble_id]?.received_transcripts,
+                    [data.item_id]: data.transcript
+                  }
+                }
+              }));
+              
+              console.log('Updated bubble content:', data.bubble_id, 'item:', data.item_id, 'content:', data.ordered_content);
               break;
             }
             case 'response.audio_transcript.done': {
@@ -626,12 +679,9 @@ function ChatComponent() {
                 content: data.transcript,
                 timestamp: new Date().toISOString()
               }]);
+              console.log('AI response received');
               break;
             }
-            case 'input_audio_buffer.speech_started':
-              // Stop AI audio playback when user starts speaking
-              stopAudioPlayback();
-              break;
             case 'response.audio.delta':
               // Handle audio data
               try {

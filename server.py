@@ -1216,6 +1216,12 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
     current_turns = initial_turns  # Initialize with existing turn count for continuing conversations
     user_id = None  # Track user_id for knowledge updates
     pending_user_message = False  # Track if we have a user message waiting for AI response
+    
+    # Bubble session management
+    last_ai_item_id = None  # Track last AI message item_id for consolidation logic
+    current_bubble_session = None  # Current user bubble session
+    bubble_sessions = {}  # Map bubble_id to session data
+    
     logging.info(f"[Handler {handler_id}] Starting with initial_turns={initial_turns}")
     try:
         while True:
@@ -1225,8 +1231,64 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
             data = json.loads(message)
             event_type = data.get('type')
             # Forward audio events immediately
-            if event_type in ['response.audio.delta', 'response.audio.done', 'input_audio_buffer.speech_started']:
+            if event_type in ['response.audio.delta', 'response.audio.done']:
                 await client_ws.send_json(data)
+                continue
+            
+            # Handle input audio buffer committed - manage bubble sessions
+            if event_type == 'input_audio_buffer.committed':
+                item_id = data.get('item_id')
+                previous_item_id = data.get('previous_item_id')
+                
+                # Determine if we should create new bubble or extend existing session
+                should_create_new_bubble = previous_item_id == last_ai_item_id or current_bubble_session is None
+                
+                if should_create_new_bubble:
+                    # Create new bubble session
+                    bubble_id = str(uuid.uuid4())
+                    message_id = str(uuid.uuid4())
+                    
+                    current_bubble_session = {
+                        "bubble_id": bubble_id,
+                        "message_id": message_id,
+                        "expected_items": [item_id],
+                        "item_order": [item_id],
+                        "received_transcripts": {},
+                        "conversation_id": conversation_id
+                    }
+                    bubble_sessions[bubble_id] = current_bubble_session
+                    
+                    await client_ws.send_json({
+                        "type": "bubble.session.created",
+                        "bubble_id": bubble_id,
+                        "message_id": message_id,
+                        "item_id": item_id
+                    })
+                    
+                    logging.info(f"[Handler {handler_id}] Created new bubble session: bubble_id={bubble_id}, item_id={item_id}")
+                    
+                else:
+                    # Extend existing bubble session
+                    current_bubble_session["expected_items"].append(item_id)
+                    
+                    # Determine position based on previous_item_id
+                    if previous_item_id in current_bubble_session["item_order"]:
+                        # Insert after the previous item
+                        prev_index = current_bubble_session["item_order"].index(previous_item_id)
+                        current_bubble_session["item_order"].insert(prev_index + 1, item_id)
+                    else:
+                        # Append to end (fallback)
+                        current_bubble_session["item_order"].append(item_id)
+                    
+                    await client_ws.send_json({
+                        "type": "bubble.session.extended",
+                        "bubble_id": current_bubble_session["bubble_id"],
+                        "item_id": item_id,
+                        "item_order": current_bubble_session["item_order"]
+                    })
+                    
+                    logging.info(f"[Handler {handler_id}] Extended bubble session: bubble_id={current_bubble_session['bubble_id']}, item_id={item_id}, order={current_bubble_session['item_order']}")
+                
                 continue
             
             # Forward AI transcript events (needed for frontend to display AI messages)
@@ -1331,7 +1393,8 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
             elif event_type == 'response.audio_transcript.done' and conversation_id:
                 logging.info(f"[Handler {handler_id}] Received response.audio_transcript.done event")
                 transcript = data.get('transcript', '')
-                logging.info(f"[Handler {handler_id}] Assistant transcript: '{transcript}' (length: {len(transcript)})")
+                item_id = data.get('item_id')  # AI message item_id
+                logging.info(f"[Handler {handler_id}] Assistant transcript: '{transcript}' (length: {len(transcript)}), item_id: {item_id}")
                 if transcript:
                     # Generate message ID upfront for consistency with user messages
                     message_id = str(uuid.uuid4())
@@ -1347,6 +1410,15 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                     
                     asyncio.create_task(save_assistant_message_background())
                     
+                    # Update AI item tracking for consolidation logic
+                    if item_id:
+                        last_ai_item_id = item_id
+                        logging.info(f"[Handler {handler_id}] Updated last_ai_item_id: {item_id}")
+                    
+                    # Reset bubble session when AI responds
+                    current_bubble_session = None
+                    logging.info(f"[Handler {handler_id}] AI response received - reset bubble session")
+                    
                     # Only increment turn count if there was a pending user message (complete exchange)
                     if pending_user_message:
                         current_turns += 1
@@ -1360,37 +1432,72 @@ async def handle_openai_response_with_callback(ws, client_ws, level, context, la
                         logging.info(f"[Handler {handler_id}] AI response without pending user message - no turn increment")
                 else:
                     logging.warning(f"[Handler {handler_id}] Empty transcript in response.audio_transcript.done event")
-            # Save user messages (transcription) and generate feedback
+            # Handle user transcript completion - update bubble sessions
             elif event_type == 'conversation.item.input_audio_transcription.completed' and conversation_id:
                 transcript = data.get('transcript', '')
-                if transcript:
-                    # Generate message ID upfront for immediate display
-                    message_id = str(uuid.uuid4())
+                item_id = data.get('item_id')
+                if transcript and item_id:
+                    # Find which bubble session expects this item_id
+                    target_bubble = None
+                    for bubble in bubble_sessions.values():
+                        if item_id in bubble["expected_items"]:
+                            target_bubble = bubble
+                            break
                     
-                    # IMMEDIATELY send to frontend for instant display (non-blocking)
-                    logging.info(f"[WebSocket] Immediately emitting user message for instant display: message_id={message_id}, transcript={transcript}")
-                    await client_ws.send_json({
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "message_id": message_id,
-                        "transcript": transcript
-                    })
-                    
-                    # Save to DB and generate feedback in background (non-blocking)
-                    async def save_and_generate_feedback_background():
-                        try:
-                            # Save with pre-generated ID
-                            await save_message_with_id(conversation_id, 'user', transcript, message_id)
-                            logging.info(f"[Background] Saved user message to DB: message_id={message_id}")
+                    if target_bubble:
+                        # Store transcript in the bubble session
+                        target_bubble["received_transcripts"][item_id] = transcript
+                        
+                        # Build ordered content from received transcripts
+                        ordered_content_parts = []
+                        for ordered_item_id in target_bubble["item_order"]:
+                            if ordered_item_id in target_bubble["received_transcripts"]:
+                                ordered_content_parts.append(target_bubble["received_transcripts"][ordered_item_id])
+                        
+                        ordered_content = ' '.join(ordered_content_parts)
+                        
+                        # Send bubble update to frontend
+                        await client_ws.send_json({
+                            "type": "bubble.content.updated",
+                            "bubble_id": target_bubble["bubble_id"],
+                            "message_id": target_bubble["message_id"],
+                            "item_id": item_id,
+                            "transcript": transcript,
+                            "ordered_content": ordered_content,
+                            "is_complete": len(target_bubble["received_transcripts"]) == len(target_bubble["expected_items"])
+                        })
+                        
+                        logging.info(f"[Handler {handler_id}] Updated bubble {target_bubble['bubble_id']} with transcript for item {item_id}: {transcript}")
+                        logging.info(f"[Handler {handler_id}] Ordered content: {ordered_content}")
+                        
+                        # Save/update message in database when complete or first transcript
+                        if len(target_bubble["received_transcripts"]) == 1:
+                            # First transcript - create new message
+                            async def save_initial_message():
+                                try:
+                                    await save_message_with_id(conversation_id, 'user', ordered_content, target_bubble["message_id"])
+                                    logging.info(f"[Background] Saved initial user message: {target_bubble['message_id']}")
+                                    
+                                    # Generate feedback in background
+                                    asyncio.create_task(process_feedback_background(target_bubble["message_id"], language, level, client_ws, INTERACTION_MODE))
+                                except Exception as e:
+                                    logging.error(f"[Background] Error saving initial message: {e}")
                             
-                            # Generate feedback in background
-                            asyncio.create_task(process_feedback_background(message_id, language, level, client_ws, INTERACTION_MODE))
-                            logging.info(f"[Background] Started feedback generation for message_id={message_id}")
-                        except Exception as e:
-                            logging.error(f"[Background] Error in save_and_generate_feedback: {e}")
-                    
-                    asyncio.create_task(save_and_generate_feedback_background())
-                    pending_user_message = True
-                    logging.info(f"[Handler {handler_id}] User message received - pending AI response for turn completion")
+                            asyncio.create_task(save_initial_message())
+                        else:
+                            # Update existing message with new ordered content
+                            async def update_message_content():
+                                try:
+                                    supabase.table('messages').update({'content': ordered_content}).eq('id', target_bubble["message_id"]).execute()
+                                    logging.info(f"[Background] Updated message content: {target_bubble['message_id']}")
+                                except Exception as e:
+                                    logging.error(f"[Background] Error updating message: {e}")
+                            
+                            asyncio.create_task(update_message_content())
+                        
+                        pending_user_message = True
+                    else:
+                        logging.warning(f"[Handler {handler_id}] No bubble session found for item_id: {item_id}")
     except Exception as e:
         logging.error(f"[Handler {handler_id}] Error handling OpenAI response: {e}")
     finally:
