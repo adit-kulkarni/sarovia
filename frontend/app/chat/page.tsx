@@ -55,7 +55,7 @@ function ChatComponent() {
   const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, string>>({});
   const [sessionReady, setSessionReady] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
-  const [isMicPrompted, setIsMicPrompted] = useState(false);
+
   
   // Add state for personalized context titles
   const [contextTitleCache, setContextTitleCache] = useState<{ [key: string]: string }>({});
@@ -84,7 +84,7 @@ function ChatComponent() {
         const data = await response.json();
         const titleCache: { [key: string]: string } = {};
         
-        data.contexts.forEach((context: any) => {
+        data.contexts.forEach((context: { id: string; title: string }) => {
           titleCache[context.id] = context.title;
         });
         
@@ -125,19 +125,19 @@ function ChatComponent() {
     console.log('[Chat] State change - sessionReady:', sessionReady);
   }, [sessionReady]);
 
-  const [customInstructions, setCustomInstructions] = useState<string | null>(null);
+
   const [lessonProgress, setLessonProgress] = useState<LessonProgress | null>(null);
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
   const [isLessonConversation, setIsLessonConversation] = useState(false);
   
   // Conversation completion states (for non-lesson conversations)
   const [isCompletingConversation, setIsCompletingConversation] = useState(false);
-  const [conversationSummaryData, setConversationSummaryData] = useState<any>(null);
+  const [conversationSummaryData, setConversationSummaryData] = useState<Record<string, unknown> | null>(null);
   const [showConversationSummary, setShowConversationSummary] = useState(false);
   
   // Lesson Summary Modal States
   const [showLessonSummary, setShowLessonSummary] = useState(false);
-  const [lessonSummaryData, setLessonSummaryData] = useState<any>(null);
+  const [lessonSummaryData, setLessonSummaryData] = useState<Record<string, unknown> | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   
   // Token state for API calls
@@ -151,11 +151,9 @@ function ChatComponent() {
   const [vadSettings, setVadSettings] = useState<VADSettings>({ type: 'semantic', eagerness: 'low' });
 
   const wsRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const currentStreamingMessageRef = useRef<number | null>(null);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const isPlayingRef = useRef(false);
   const audioBufferRef = useRef<Int16Array[]>([]);
@@ -163,26 +161,7 @@ function ChatComponent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const languages = {
-    en: 'English',
-    it: 'Italian',
-    es: 'Spanish',
-    pt: 'Portuguese',
-    fr: 'French',
-    de: 'German',
-    kn: 'Kannada'
-  };
 
-  const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-
-  const contexts = {
-    restaurant: 'Restaurant',
-    drinks: 'Drinks',
-    introduction: 'Introduction',
-    market: 'Market',
-    karaoke: 'Karaoke',
-    city: 'City Guide'
-  };
 
   useEffect(() => {
     const initializeChat = async () => {
@@ -364,7 +343,7 @@ function ChatComponent() {
         }
 
         setIsLoading(false);
-      } catch (err) {
+      } catch {
         setError('Failed to initialize chat');
         setIsLoading(false);
       }
@@ -373,25 +352,7 @@ function ChatComponent() {
     initializeChat();
   }, [router, searchParams]);
 
-  useEffect(() => {
-    const fetchInstructions = async () => {
-      const conversationId = searchParams.get('conversation');
-      if (!conversationId) return;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const token = session.access_token;
-      try {
-        const res = await fetch(`${API_BASE}/api/conversation_instructions?conversation_id=${conversationId}&token=${token}`);
-        if (res.ok) {
-          const data = await res.json();
-          setCustomInstructions(data.instructions);
-        }
-      } catch (e) {
-        // Ignore, fallback to default
-      }
-    };
-    fetchInstructions();
-  }, [searchParams]);
+
 
   useEffect(() => {
     // Parse context, language, level from query params
@@ -739,7 +700,6 @@ function ChatComponent() {
 
   // Step 3: User clicks 'Start Recording' for mic access
   const handleStartRecording = async () => {
-    setIsMicPrompted(true);
     setIsConversationActive(true);
     await startRecording();
   };
@@ -882,10 +842,7 @@ function ChatComponent() {
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.refresh();
-  };
+
 
   const getHint = async () => {
     console.warn('getHint called, conversation_id:', conversation_id, 'customInput:', customHintInput);
@@ -1134,9 +1091,7 @@ function ChatComponent() {
     }
   };
 
-  const handleReturnToHistory = () => {
-    router.push('/history');
-  };
+
 
   // UI rendering logic
   if (!conversationStarted) {
@@ -1193,7 +1148,7 @@ function ChatComponent() {
                       name="vadType"
                       value="semantic"
                       checked={vadSettings?.type === 'semantic'}
-                      onChange={(e) => setVadSettings({ type: 'semantic', eagerness: vadSettings?.eagerness || 'low' })}
+                      onChange={() => setVadSettings({ type: 'semantic', eagerness: vadSettings?.eagerness || 'low' })}
                       className="mr-3 text-orange-500 focus:ring-orange-500"
                     />
                     <div className="flex-1">
@@ -1204,7 +1159,7 @@ function ChatComponent() {
                         i
                       </div>
                       <div className="absolute right-0 top-6 w-64 p-2 bg-gray-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                        AI understands when you're done speaking and responds naturally
+                        AI understands when you&apos;re done speaking and responds naturally
                       </div>
                     </div>
                   </label>
@@ -1234,7 +1189,7 @@ function ChatComponent() {
                     name="vadType"
                     value="disabled"
                     checked={vadSettings?.type === 'disabled'}
-                    onChange={(e) => setVadSettings({ type: 'disabled', eagerness: 'low' })}
+                    onChange={() => setVadSettings({ type: 'disabled', eagerness: 'low' })}
                     className="mr-3 text-orange-500 focus:ring-orange-500"
                   />
                   <div className="flex-1">
@@ -1659,7 +1614,7 @@ function ChatComponent() {
         isOpen={showLessonSummary}
         onClose={() => setShowLessonSummary(false)}
         onReturnToDashboard={handleReturnToDashboard}
-        summaryData={lessonSummaryData}
+        summaryData={lessonSummaryData as any}
         loading={loadingSummary}
         token={token}
       />
@@ -1669,7 +1624,7 @@ function ChatComponent() {
         isOpen={showConversationSummary}
         onClose={() => setShowConversationSummary(false)}
         onReturnToDashboard={handleReturnToDashboard}
-        summaryData={conversationSummaryData}
+        summaryData={conversationSummaryData as any}
         loading={loadingSummary}
         token={token}
       />
