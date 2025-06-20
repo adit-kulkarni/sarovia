@@ -88,7 +88,7 @@ export default function YourKnowledgePanel({ language, level, refreshTrigger }: 
       const data = await res.json();
       setKnowledge(data.knowledge);
       setLastFetch(new Date());
-    } catch (e) {
+    } catch {
       setError('Failed to fetch knowledge data');
     } finally {
       setLoading(false);
@@ -116,7 +116,7 @@ export default function YourKnowledgePanel({ language, level, refreshTrigger }: 
         // If no update needed, just fetch current data
         await fetchKnowledge();
       }
-    } catch (e) {
+    } catch {
       setError('Failed to refresh knowledge data');
     } finally {
       setRefreshing(false);
@@ -141,7 +141,7 @@ export default function YourKnowledgePanel({ language, level, refreshTrigger }: 
       } else {
         setError(data.error || 'Failed to generate knowledge report');
       }
-    } catch (e) {
+    } catch {
       setError('Failed to generate knowledge report');
     } finally {
       setGenerating(false);
@@ -210,12 +210,12 @@ export default function YourKnowledgePanel({ language, level, refreshTrigger }: 
         {knowledge && (
           <div className="grid grid-cols-2 gap-4 overflow-y-auto" style={{ maxHeight: '300px' }}>
             {PARTS.map(part => {
-              let value = part === 'verbs'
+              const value = part === 'verbs'
                 ? Object.keys(knowledge[part] || {}).length
                 : knowledge[part] ? knowledge[part].length : 0;
-              let showProgress = progressParts.includes(part);
-              let target = targets[part] || 1;
-              let percent = Math.min(value / target, 1);
+              const showProgress = progressParts.includes(part);
+              const target = targets[part] || 1;
+              const percent = Math.min(value / target, 1);
               return (
                 <div key={part} className="bg-gray-100 rounded p-4 flex flex-col justify-between h-full">
                   <div>

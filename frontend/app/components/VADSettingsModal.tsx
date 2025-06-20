@@ -59,7 +59,7 @@ const VADSettingsModal: React.FC<VADSettingsModalProps> = ({
                     i
                   </div>
                   <div className="absolute right-0 top-6 w-64 p-2 bg-gray-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                    AI understands when you're done speaking and responds naturally
+                    AI understands when you&apos;re done speaking and responds naturally
                   </div>
                 </div>
               </label>

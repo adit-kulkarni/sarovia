@@ -40,7 +40,7 @@ export default function FeedbackCard({ feedback, onFeedbackClick }: FeedbackCard
       <div className="flex justify-between items-start">
         <div>
           <h4 className="text-sm font-medium text-gray-900">
-            {feedback.mistakes.length} corrections for "{firstThreeWords}"
+            {feedback.mistakes.length} corrections for &quot;{firstThreeWords}&quot;
           </h4>
           <p className="text-xs text-gray-500 mt-1">
             {new Date(feedback.timestamp).toLocaleTimeString()}
@@ -60,7 +60,7 @@ export default function FeedbackCard({ feedback, onFeedbackClick }: FeedbackCard
       {isExpanded && (
         <div className="mt-3 space-y-3">
           <div className="text-sm text-gray-600 italic">
-            "{displayMessage}"
+            &quot;{displayMessage}&quot;
           </div>
           {feedback.mistakes.map((mistake, index) => (
             <div 

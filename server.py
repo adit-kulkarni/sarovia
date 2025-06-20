@@ -12,6 +12,7 @@ import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 import requests
 import logging
+import time
 import uuid
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -38,7 +39,71 @@ except ImportError:
 # Import the optimized lesson summary
 from optimized_lesson_summary import get_lesson_summary_optimized
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+# Configure cleaner logging with colors
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with colors for different log levels"""
+    
+    # ANSI color codes
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[32m',     # Green
+        'WARNING': '\033[33m',  # Yellow
+        'ERROR': '\033[31m',    # Red
+        'CRITICAL': '\033[35m', # Magenta
+        'RESET': '\033[0m',     # Reset
+        'BOLD': '\033[1m',      # Bold
+        'DIM': '\033[2m'        # Dim
+    }
+    
+    def format(self, record):
+        # Add colors based on log level
+        level_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        reset = self.COLORS['RESET']
+        bold = self.COLORS['BOLD']
+        dim = self.COLORS['DIM']
+        
+        # Format timestamp in dim gray
+        timestamp = f"{dim}{self.formatTime(record, '%H:%M:%S')}{reset}"
+        
+        # Format level with color and bold
+        level = f"{bold}{level_color}[{record.levelname}]{reset}"
+        
+        # Format message
+        message = record.getMessage()
+        
+        return f"{timestamp} {level} {message}"
+
+# Set up colored logging
+handler = logging.StreamHandler()
+handler.setFormatter(ColoredFormatter())
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[handler]
+)
+
+# Reduce noise from external libraries
+logging.getLogger('websockets').setLevel(logging.WARNING)
+logging.getLogger('aiohttp').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+# Function to mask sensitive data in logs
+def mask_sensitive_data(data: str, max_length: int = 50) -> str:
+    """Mask sensitive data like IDs and tokens for cleaner logs"""
+    if not data:
+        return data
+    
+    # Mask UUIDs (keep first 8 chars)
+    uuid_pattern = r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+    data = re.sub(uuid_pattern, lambda m: m.group(0)[:8] + '...', data)
+    
+    # Truncate if too long
+    if len(data) > max_length:
+        data = data[:max_length] + '...'
+    
+    return data
 
 # Add connection management and task queue classes
 class DatabaseManager:
@@ -464,6 +529,59 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    # Extract key info for logging
+    method = request.method
+    path = request.url.path
+    query_params = dict(request.query_params)
+    
+    # Mask sensitive query parameters
+    if 'token' in query_params:
+        query_params['token'] = 'jwt...'
+    if 'conversation_id' in query_params:
+        query_params['conversation_id'] = mask_sensitive_data(query_params['conversation_id'], 12)
+    if 'curriculum_id' in query_params:
+        query_params['curriculum_id'] = mask_sensitive_data(query_params['curriculum_id'], 12)
+    
+    # Create clean query string for logging
+    query_str = '?' + '&'.join([f'{k}={v}' for k, v in query_params.items()]) if query_params else ''
+    
+    # Process the request
+    try:
+        response = await call_next(request)
+        duration = round((time.time() - start_time) * 1000, 1)  # ms
+        
+        # Color code status codes
+        status_color = ""
+        if response.status_code < 300:
+            status_color = "\033[32m"  # Green for success
+        elif response.status_code < 400:
+            status_color = "\033[33m"  # Yellow for redirects
+        else:
+            status_color = "\033[31m"  # Red for errors
+        
+        reset = "\033[0m"
+        bold = "\033[1m"
+        
+        # Log requests with colors
+        if response.status_code < 400:
+            logging.info(f"{bold}{method}{reset} {path}{query_str} → {status_color}{response.status_code}{reset} ({duration}ms)")
+        else:
+            logging.warning(f"{bold}{method}{reset} {path}{query_str} → {status_color}{response.status_code}{reset} ({duration}ms)")
+            
+        return response
+        
+    except Exception as e:
+        duration = round((time.time() - start_time) * 1000, 1)
+        bold = "\033[1m"
+        reset = "\033[0m"
+        logging.error(f"{bold}{method}{reset} {path}{query_str} → \033[31mERROR\033[0m ({duration}ms): {str(e)[:100]}")
+        raise
+
 @app.get("/")
 async def root():
     return {"message": "Sarovia Language Learning API is running!", "status": "healthy"}
@@ -669,21 +787,17 @@ def verify_jwt(token):
 async def connect_to_openai():
     """Establish WebSocket connection with OpenAI"""
     try:
-        logging.info(f"[OpenAI] Attempting to connect to WebSocket URL: {WS_URL}")
-        logging.info(f"[OpenAI] Using API key prefix: {API_KEY[:7]}...")
-        
         headers = {
             'Authorization': f'Bearer {API_KEY}',
             'OpenAI-Beta': 'realtime=v1'
         }
-        logging.info(f"[OpenAI] Headers: {dict((k, v[:20] + '...' if k == 'Authorization' else v) for k, v in headers.items())}")
         
         ws = await websockets.connect(
             WS_URL,
             extra_headers=headers,
             timeout=30  # Add explicit timeout
         )
-        logging.info(f"[OpenAI] WebSocket connection established successfully")
+        logging.info("[OpenAI] WebSocket connection established")
         return ws
     except websockets.exceptions.InvalidStatusCode as e:
         logging.error(f"[OpenAI] Invalid status code: {e.status_code} - {e}")
@@ -1030,11 +1144,9 @@ Language feature tag guidelines:
         # Log the feedback results
         mistake_count = len(feedback.mistakes)
         if mistake_count == 0:
-            logging.info(f"[Background] Perfect message detected for message_id={message_id}")
+            logging.info(f"[Background] Perfect message detected for message_id={mask_sensitive_data(message_id, 8)}")
         else:
-            logging.info(f"[Background] Found {mistake_count} mistakes for message_id={message_id}")
-            for i, mistake in enumerate(feedback.mistakes, 1):
-                logging.info(f"[Background] Mistake {i}: category={mistake.category}, type={mistake.type}, severity={mistake.severity}")
+            logging.info(f"[Background] Found {mistake_count} mistakes for message_id={mask_sensitive_data(message_id, 8)}")
         
         # Convert mistakes to dictionaries for database storage
         mistakes_dict = [mistake.dict() for mistake in feedback.mistakes]
@@ -1293,7 +1405,6 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
     try:
         if not curriculum_id:
             raise ValueError("curriculum_id is required to create a conversation")
-        logging.debug(f"[create_conversation] user_id={user_id}, context={context}, language={language}, level={level}, curriculum_id={curriculum_id}")
         result = supabase.table('conversations').insert({
             'user_id': user_id,
             'context': context,
@@ -1301,7 +1412,6 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
             'level': level,
             'curriculum_id': curriculum_id
         }).execute()
-        logging.debug(f"[create_conversation] Supabase insert result.data: {result.data}")
         return result.data[0]['id']
     except Exception as e:
         logging.error(f"Error creating conversation: {e}")
@@ -1310,8 +1420,6 @@ async def create_conversation(user_id: str, context: str, language: str, level: 
 async def save_message(conversation_id: str, role: str, content: str):
     """Save a message to the database and return the result"""
     try:
-        logging.info(f"[save_message] Attempting to save {role} message: conversation_id={conversation_id}, content_length={len(content)}")
-        
         # Use database manager for async execution
         def insert_message():
             return supabase.table('messages').insert({
@@ -1321,7 +1429,6 @@ async def save_message(conversation_id: str, role: str, content: str):
             }).execute()
         
         result = await db_manager.execute_query(insert_message)
-        logging.info(f"[save_message] Successfully saved {role} message: {result.data[0]['id'] if result.data else 'no_id'}")
         return result
     except Exception as e:
         logging.error(f"Error saving {role} message for conversation {conversation_id}: {e}")
@@ -1330,8 +1437,6 @@ async def save_message(conversation_id: str, role: str, content: str):
 async def save_message_with_id(conversation_id: str, role: str, content: str, message_id: str):
     """Save a message to the database with a specific ID"""
     try:
-        logging.info(f"[save_message_with_id] Attempting to save {role} message: id={message_id}, conversation_id={conversation_id}, content_length={len(content)}")
-        
         # Use database manager for async execution
         def insert_message():
             return supabase.table('messages').insert({
@@ -1342,7 +1447,6 @@ async def save_message_with_id(conversation_id: str, role: str, content: str, me
             }).execute()
         
         result = await db_manager.execute_query(insert_message)
-        logging.info(f"[save_message_with_id] Successfully saved {role} message: {result.data[0]['id'] if result.data else 'no_id'}")
         return result
     except Exception as e:
         logging.error(f"Error saving {role} message with ID {message_id}: {e}")
@@ -5324,30 +5428,45 @@ async def get_progress_metrics(
                     "metric_type": metric_type
                 }
             
-            # Get feedback for these messages
+            # Get feedback for these messages in chunks to avoid URL length limits
             message_ids = [msg['id'] for msg in messages_result.data]
-            feedback_query = supabase.table('message_feedback').select(
-                'message_id, mistakes'
-            ).in_('message_id', message_ids)
-            
-            feedback_result = await db_manager.execute_query(lambda: feedback_query.execute())
-            
-            # Create feedback lookup
             feedback_map = {}
-            for feedback in feedback_result.data:
-                feedback_map[feedback['message_id']] = feedback.get('mistakes', [])
+            
+            # Process message IDs in chunks of 100 to avoid URL length limits
+            chunk_size = 100
+            for i in range(0, len(message_ids), chunk_size):
+                chunk_ids = message_ids[i:i + chunk_size]
+                try:
+                    feedback_query = supabase.table('message_feedback').select(
+                        'message_id, mistakes'
+                    ).in_('message_id', chunk_ids)
+                    
+                    feedback_result = await db_manager.execute_query(lambda: feedback_query.execute())
+                    
+                    # Add to feedback map
+                    for feedback in feedback_result.data:
+                        feedback_map[feedback['message_id']] = feedback.get('mistakes', [])
+                        
+                except Exception as chunk_error:
+                    logging.warning(f"Error fetching feedback for chunk {i//chunk_size + 1}: {chunk_error}")
+                    # Continue with other chunks even if one fails
+                    continue
             
             # Group by date and calculate accuracy
             from collections import defaultdict
             daily_stats = defaultdict(lambda: {'total': 0, 'perfect': 0})
             
             for message in messages_result.data:
-                date = message['created_at'][:10]  # Get YYYY-MM-DD
-                mistakes = feedback_map.get(message['id'], [])
-                
-                daily_stats[date]['total'] += 1
-                if len(mistakes) == 0:  # No mistakes = perfect message
-                    daily_stats[date]['perfect'] += 1
+                try:
+                    date = message['created_at'][:10]  # Get YYYY-MM-DD
+                    mistakes = feedback_map.get(message['id'], [])
+                    
+                    daily_stats[date]['total'] += 1
+                    if len(mistakes) == 0:  # No mistakes = perfect message
+                        daily_stats[date]['perfect'] += 1
+                except Exception as msg_error:
+                    logging.warning(f"Error processing message {message.get('id')}: {msg_error}")
+                    continue
             
             # Convert to timeline format
             timeline_data = []
@@ -6713,4 +6832,62 @@ async def populate_context_phrases(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    
+    # Configure uvicorn logging with colors
+    class UvicornColoredFormatter(logging.Formatter):
+        """Colored formatter for uvicorn logs"""
+        
+        COLORS = {
+            'INFO': '\033[36m',     # Cyan for uvicorn info
+            'WARNING': '\033[33m',  # Yellow
+            'ERROR': '\033[31m',    # Red
+            'RESET': '\033[0m',     # Reset
+            'BOLD': '\033[1m',      # Bold
+            'DIM': '\033[2m'        # Dim
+        }
+        
+        def format(self, record):
+            level_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+            reset = self.COLORS['RESET']
+            bold = self.COLORS['BOLD']
+            dim = self.COLORS['DIM']
+            
+            timestamp = f"{dim}{self.formatTime(record, '%H:%M:%S')}{reset}"
+            level = f"{bold}{level_color}[{record.levelname}]{reset}"
+            message = record.getMessage()
+            
+            return f"{timestamp} {level} {message}"
+    
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": UvicornColoredFormatter,
+                "datefmt": "%H:%M:%S"
+            },
+            "access": {
+                "()": UvicornColoredFormatter,
+                "datefmt": "%H:%M:%S"
+            }
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            },
+            "access": {
+                "formatter": "access", 
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            }
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO"},
+            "uvicorn.error": {"level": "INFO"},
+            "uvicorn.access": {"handlers": ["access"], "level": "WARNING", "propagate": False}
+        }
+    }
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=log_config) 

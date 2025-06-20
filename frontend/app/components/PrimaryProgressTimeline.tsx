@@ -449,7 +449,7 @@ export default function PrimaryProgressTimeline({ selectedCurriculum }: PrimaryP
           })}
 
           {/* Y-axis labels */}
-          {[1, 0.75, 0.5, 0.25, 0].map((ratio, index) => {
+          {[1, 0.75, 0.5, 0.25, 0].map((ratio) => {
             const value = minValue + (range * ratio);
             return (
               <text

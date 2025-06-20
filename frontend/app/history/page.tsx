@@ -49,46 +49,6 @@ const contextTitles: { [key: string]: string } = {
   city: 'Finding Things to Do in the City'
 };
 
-// Cache for personalized context titles
-const personalizedContextTitles: { [key: string]: string } = {};
-
-// Function to get context title (handles both classic and personalized contexts)
-const getContextTitle = async (contextId: string, token?: string): Promise<string> => {
-  // If it's a classic context, return immediately
-  if (contextTitles[contextId]) {
-    return contextTitles[contextId];
-  }
-  
-  // If it's a personalized context (starts with "user_"), fetch from API
-  if (contextId.startsWith('user_')) {
-    // Check cache first
-    if (personalizedContextTitles[contextId]) {
-      return personalizedContextTitles[contextId];
-    }
-    
-    // Fetch from API
-    if (token) {
-      try {
-        const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
-        const response = await fetch(`${API_BASE}/api/personalized_contexts?token=${token}`);
-        if (response.ok) {
-          const data = await response.json();
-          const context = data.contexts.find((ctx: any) => ctx.id === contextId);
-          if (context) {
-            personalizedContextTitles[contextId] = context.title;
-            return context.title;
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching personalized context title:', error);
-      }
-    }
-  }
-  
-  // Fallback to the original context ID
-  return contextId;
-};
-
 const languageNames: { [key: string]: string } = {
   en: 'English',
   it: 'Italian',
@@ -232,7 +192,6 @@ const HistoryPage = () => {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
         throw new Error(`Failed to load conversation: ${response.status}`);
       }
 
@@ -306,7 +265,6 @@ const HistoryPage = () => {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
         throw new Error(`Failed to load report card: ${response.status}`);
       }
 

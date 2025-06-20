@@ -1,7 +1,8 @@
 'use client';
 
-import { ChatBubbleProps, mistakeCategoryEmojis, Mistake } from '../types/feedback';
+import { ChatBubbleProps, Mistake } from '../types/feedback';
 import React, { useState } from 'react';
+import Image from 'next/image';
 
 export default function ChatBubble({ message, hasFeedback, onFeedbackClick, language = 'es' }: ChatBubbleProps) {
   const [translation, setTranslation] = useState<string>('');
@@ -116,10 +117,12 @@ export default function ChatBubble({ message, hasFeedback, onFeedbackClick, lang
             {isTranslating ? (
               <span className="animate-spin text-gray-600 text-sm">⟳</span>
             ) : (
-              <img 
+              <Image 
                 src="/translate_svg.svg" 
                 alt="Translate" 
-                                 className={`w-4 h-4 transition-all duration-200 ${
+                width={16}
+                height={16}
+                className={`w-4 h-4 transition-all duration-200 ${
                   isUser 
                     ? 'filter brightness-0 invert opacity-80 hover:opacity-100' 
                     : 'filter brightness-0 opacity-60 hover:opacity-80'

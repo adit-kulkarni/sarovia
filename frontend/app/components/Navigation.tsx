@@ -7,8 +7,6 @@ import { supabase } from '../../supabaseClient';
 import { useToast } from './Toast';
 import { 
   HomeIcon, 
-  BookOpenIcon, 
-  ChartBarIcon, 
   UserIcon,
   ClockIcon,
   ArrowRightOnRectangleIcon
@@ -17,7 +15,7 @@ import {
 const Navigation = () => {
   const pathname = usePathname();
   const { addToast } = useToast();
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   const [debugClicks, setDebugClicks] = useState(0);
 
   const navigationItems = [

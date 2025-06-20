@@ -6,14 +6,9 @@ import { useUser } from './hooks/useUser';
 import Auth from './Auth';
 import { supabase } from '../supabaseClient';
 import MistakeCategoriesChart from './components/MistakeCategoriesChart';
-import SeverityAnalysisChart from './components/SeverityAnalysisChart';
 import CommonMistakesList from './components/CommonMistakesList';
-import ProgressOverTimeChart from './components/ProgressOverTimeChart';
-import ScaledMistakesPerConversationChart from './components/ScaledMistakesPerConversationChart';
 import LanguageFeaturesHeatmap from './components/LanguageFeaturesHeatmap';
 import PrimaryProgressTimeline from './components/PrimaryProgressTimeline';
-import CorrectionPatterns from './components/CorrectionPatterns';
-import ProficiencyLevelChart from './components/ProficiencyLevelChart';
 import { createClient } from '@supabase/supabase-js';
 import { Dialog, Transition } from '@headlessui/react';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/solid';
@@ -21,7 +16,6 @@ import { XMarkIcon } from '@heroicons/react/24/outline';
 import '@fontsource/press-start-2p';
 import YourKnowledgePanel from './components/YourKnowledgePanel';
 import { useToast } from './components/Toast';
-
 import LessonSummaryModal from './components/LessonSummaryModal';
 
 interface LanguageCard {
@@ -459,7 +453,7 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   const [hasTimedOut, setHasTimedOut] = useState(false);
   const [isForceRefresh, setIsForceRefresh] = useState(false);
   const [showLessonModal, setShowLessonModal] = useState(false);
-  const [selectedInsight, setSelectedInsight] = useState<any>(null);
+
   const [lessonPreview, setLessonPreview] = useState<any>(null);
   const [generatingLesson, setGeneratingLesson] = useState(false);
 
@@ -517,7 +511,6 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
   };
 
   const handlePracticeNow = async (insight: any) => {
-    setSelectedInsight(insight);
     setGeneratingLesson(true);
     setShowLessonModal(true);
     
@@ -601,7 +594,6 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
       // Step 3: Close modal and navigate to chat
       setShowLessonModal(false);
       setLessonPreview(null);
-      setSelectedInsight(null);
       
       // Navigate to the chat interface with the new conversation
       router.push(`/chat?conversation=${conversationData.conversation_id}&curriculum_id=${curriculumId}`);
@@ -909,7 +901,7 @@ const AIInsightsSection = ({ curriculumId, token, language }: {
 const Dashboard = () => {
   const [curriculums, setCurriculums] = useState<Curriculum[]>([]);
   const [selectedCurriculum, setSelectedCurriculum] = useState<Curriculum | null>(null);
-  const [lessons, setLessons] = useState<LessonPreview[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -940,8 +932,7 @@ const Dashboard = () => {
   const [displayedLessonsCount, setDisplayedLessonsCount] = useState(10);
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
 
-  const [insights, setInsights] = useState(null);
-  const [insightsLoading, setInsightsLoading] = useState(false);
+
   const router = useRouter();
 
   const user = useUser();
@@ -1017,24 +1008,7 @@ const Dashboard = () => {
     }
   }
 
-  // Fetch lessons for selected curriculum
-  useEffect(() => {
-    if (selectedCurriculum && token) fetchLessons(selectedCurriculum.id);
-    else setLessons([]);
-  }, [selectedCurriculum, token]);
 
-  async function fetchLessons(curriculumId: string) {
-    // Don't show loading for lessons since it's quick
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/curriculums/${curriculumId}/lessons?token=${token}`);
-      if (!res.ok) throw new Error('Failed to fetch lessons');
-      const data: LessonPreview[] = await res.json();
-      setLessons(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
 
   // Fetch lesson templates for selected curriculum's language
   useEffect(() => {
@@ -1086,9 +1060,7 @@ const Dashboard = () => {
     }
   };
 
-  const handleAddLanguage = () => {
-    router.push('/curriculum'); // Go to curriculum creation page
-  };
+
 
   const handleStartLesson = async (lessonId: string) => {
     if (!selectedCurriculum) return;
@@ -1197,10 +1169,7 @@ const Dashboard = () => {
     router.push(`/chat?language=${selectedCurriculum.language}&level=${selectedCurriculum.start_level}&context=${contextId}&curriculum_id=${selectedCurriculum.id}`);
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.refresh();
-  };
+
 
   const handleViewReportCard = async (lessonId: string) => {
     if (!selectedCurriculum || !token) return;

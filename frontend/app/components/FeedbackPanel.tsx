@@ -1,6 +1,6 @@
 'use client';
 
-import { FeedbackPanelProps, Feedback, Mistake } from '../types/feedback';
+import { FeedbackPanelProps, Feedback } from '../types/feedback';
 import FeedbackCard from './FeedbackCard';
 import { useEffect, useRef, useState } from 'react';
 

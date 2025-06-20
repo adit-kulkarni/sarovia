@@ -7,9 +7,26 @@ import { Feedback, LessonProgress } from '../types/feedback';
 import FeedbackPanel from '../components/FeedbackPanel';
 import ChatBubble from '../components/ChatBubble';
 
-import LessonSummaryModal from '../components/LessonSummaryModal';
+import LessonSummaryModal, { LessonSummaryData } from '../components/LessonSummaryModal';
 import { VADSettings } from '../components/VADSettingsModal';
 import type { Message } from '../types/feedback';
+
+// WebSocket message types
+type InitMessage = 
+  | {
+      type: 'init';
+      conversation_id: string;
+      curriculum_id: string | null;
+      vad_settings: VADSettings;
+    }
+  | {
+      type: 'init';
+      language: string;
+      level: string;
+      context: string;
+      curriculum_id: string | null;
+      vad_settings: VADSettings;
+    };
 
 const contextTitles: { [key: string]: string } = {
   restaurant: 'Ordering at a Restaurant',
@@ -130,14 +147,10 @@ function ChatComponent() {
   const [isCompletingLesson, setIsCompletingLesson] = useState(false);
   const [isLessonConversation, setIsLessonConversation] = useState(false);
   
-  // Conversation completion states (for non-lesson conversations)
-  const [isCompletingConversation, setIsCompletingConversation] = useState(false);
-  const [conversationSummaryData, setConversationSummaryData] = useState<Record<string, unknown> | null>(null);
-  const [showConversationSummary, setShowConversationSummary] = useState(false);
-  
-  // Lesson Summary Modal States
-  const [showLessonSummary, setShowLessonSummary] = useState(false);
-  const [lessonSummaryData, setLessonSummaryData] = useState<Record<string, unknown> | null>(null);
+  // Conversation completion states (unified for both lessons and conversations)
+  const [isCompletingSummary, setIsCompletingSummary] = useState(false);
+  const [summaryData, setSummaryData] = useState<LessonSummaryData | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
   const [loadingSummary, setLoadingSummary] = useState(false);
   
   // Token state for API calls
@@ -504,7 +517,7 @@ function ChatComponent() {
           // Send initial config (init message)
           const curriculumId = searchParams.get('curriculum_id');
           const conversationId = searchParams.get('conversation');
-          let initMsg: any;
+          let initMsg: InitMessage;
           if (conversationId) {
             initMsg = {
               type: 'init',
@@ -980,8 +993,8 @@ function ChatComponent() {
       if (summaryResponse.ok) {
         const summaryData = await summaryResponse.json();
         console.log('[Complete Lesson] Fetched summary:', summaryData);
-        setLessonSummaryData(summaryData);
-        setShowLessonSummary(true);
+        setSummaryData(summaryData);
+        setShowSummary(true);
       } else {
         console.error('[Complete Lesson] Failed to fetch summary');
         // Fallback: redirect immediately if summary fails
@@ -1016,7 +1029,7 @@ function ChatComponent() {
       return;
     }
 
-    setIsCompletingConversation(true);
+    setIsCompletingSummary(true);
     setLoadingSummary(true);
     
     try {
@@ -1074,8 +1087,8 @@ function ChatComponent() {
       if (summaryResponse.ok) {
         const summaryData = await summaryResponse.json();
         console.log('[Complete Conversation] Fetched summary:', summaryData);
-        setConversationSummaryData(summaryData);
-        setShowConversationSummary(true);
+        setSummaryData(summaryData);
+        setShowSummary(true);
       } else {
         console.error('[Complete Conversation] Failed to fetch summary');
         // Fallback: redirect immediately if summary fails
@@ -1086,7 +1099,7 @@ function ChatComponent() {
       console.error('[Complete Conversation] Error completing conversation:', error);
       setError(error instanceof Error ? error.message : 'Failed to complete conversation');
     } finally {
-      setIsCompletingConversation(false);
+      setIsCompletingSummary(false);
       setLoadingSummary(false);
     }
   };
@@ -1582,10 +1595,10 @@ function ChatComponent() {
               <div className="flex flex-col items-center space-y-1">
                 <button
                   onClick={handleSaveConversation}
-                  disabled={isCompletingLesson || isCompletingConversation}
+                  disabled={isCompletingLesson || isCompletingSummary}
                   className="w-14 h-14 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-medium transition-all duration-200 disabled:opacity-50 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex items-center justify-center"
                 >
-                  {(isCompletingLesson || isCompletingConversation) ? (
+                  {(isCompletingLesson || isCompletingSummary) ? (
                     <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
                   ) : (
                     <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
@@ -1609,22 +1622,12 @@ function ChatComponent() {
       
 
       
-      {/* Lesson Summary Modal */}
+      {/* Summary Modal */}
       <LessonSummaryModal
-        isOpen={showLessonSummary}
-        onClose={() => setShowLessonSummary(false)}
+        isOpen={showSummary}
+        onClose={() => setShowSummary(false)}
         onReturnToDashboard={handleReturnToDashboard}
-        summaryData={lessonSummaryData as any}
-        loading={loadingSummary}
-        token={token}
-      />
-
-      {/* Conversation Summary Modal */}
-      <LessonSummaryModal
-        isOpen={showConversationSummary}
-        onClose={() => setShowConversationSummary(false)}
-        onReturnToDashboard={handleReturnToDashboard}
-        summaryData={conversationSummaryData as any}
+        summaryData={summaryData}
         loading={loadingSummary}
         token={token}
       />

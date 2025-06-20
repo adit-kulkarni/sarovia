@@ -48,7 +48,7 @@ interface ConversationMessage {
   feedback?: Mistake[];
 }
 
-interface LessonSummaryData {
+export interface LessonSummaryData {
   lessonTitle: string;
   totalTurns: number;
   totalMistakes: number;
@@ -135,14 +135,13 @@ export default function LessonSummaryModal({
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
         throw new Error(`Failed to load conversation: ${response.status}`);
       }
 
       const data = await response.json();
       
       // Merge feedback data with messages
-      const messagesWithFeedback = (data.messages || []).map((message: any) => {
+      const messagesWithFeedback = (data.messages || []).map((message: { id: string; role: string; content: string; timestamp: string }) => {
         const feedback = data.feedback?.[message.id];
         return {
           ...message,
