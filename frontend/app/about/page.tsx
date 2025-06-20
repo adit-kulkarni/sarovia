@@ -12,7 +12,7 @@ export default function About() {
           <section>
             <h2 className="text-xl font-semibold text-orange-700 mb-3">Our Mission</h2>
             <p className="leading-relaxed">
-              We're on a mission to make language learning more accessible, engaging, and effective through
+              We&apos;re on a mission to make language learning more accessible, engaging, and effective through
               real-time conversation practice. Our AI-powered platform provides an immersive environment
               where you can practice speaking and listening in your target language with confidence.
             </p>
@@ -44,7 +44,7 @@ export default function About() {
           <section>
             <h2 className="text-xl font-semibold text-orange-700 mb-3">Technology</h2>
             <p className="leading-relaxed">
-              Our platform leverages cutting-edge AI technology, including OpenAI's GPT-4 and real-time
+              Our platform leverages cutting-edge AI technology, including OpenAI&apos;s GPT-4 and real-time
               voice processing capabilities. This allows for natural, fluid conversations while providing
               accurate language feedback and corrections.
             </p>
@@ -53,7 +53,7 @@ export default function About() {
           <section>
             <h2 className="text-xl font-semibold text-orange-700 mb-3">Get Started</h2>
             <p className="leading-relaxed">
-              Ready to begin your language learning journey? Simply click on "New Chat" in the sidebar
+              Ready to begin your language learning journey? Simply click on &quot;New Chat&quot; in the sidebar
               and choose your preferred language and context. Our AI tutor will guide you through an
               engaging conversation practice session.
             </p>

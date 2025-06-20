@@ -3,8 +3,7 @@
 import React, { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabaseClient';
-import ConversationHistory from '../components/ConversationHistory';
-import { Feedback, LessonProgress, LessonProgressEvent } from '../types/feedback';
+import { Feedback, LessonProgress } from '../types/feedback';
 import FeedbackPanel from '../components/FeedbackPanel';
 import ChatBubble from '../components/ChatBubble';
 
@@ -45,7 +44,7 @@ function ChatComponent() {
   const [selectedLevel, setSelectedLevel] = useState('A1');
   const [selectedContext, setSelectedContext] = useState('restaurant');
   const [isLoading, setIsLoading] = useState(true);
-  const [showSidebar, setShowSidebar] = useState(true);
+
   const [currentHint, setCurrentHint] = useState<string | null>(null);
   const [isLoadingHint, setIsLoadingHint] = useState(false);
   const [customHintInput, setCustomHintInput] = useState('');

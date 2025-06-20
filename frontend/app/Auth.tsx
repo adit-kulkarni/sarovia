@@ -1,38 +1,6 @@
 import React, { useState } from 'react';
+import Image from 'next/image';
 import { supabase, getURL } from '../supabaseClient';
-
-const contextAvatars = [
-  {
-    title: 'Market Trader',
-    description: 'Negotiating at a market',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=market',
-  },
-  {
-    title: 'Waiter',
-    description: 'Ordering at a restaurant',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=waiter',
-  },
-  {
-    title: 'Barista',
-    description: 'Asking someone out for drinks',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=barista',
-  },
-  {
-    title: 'New Acquaintance',
-    description: 'Introducing yourself',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=acquaintance',
-  },
-  {
-    title: 'Karaoke Host',
-    description: 'On a karaoke night out',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=karaoke',
-  },
-  {
-    title: 'City Guide',
-    description: 'Finding things to do in the city',
-    img: 'https://api.dicebear.com/7.x/micah/svg?seed=cityguide',
-  },
-];
 
 export default function Auth() {
   const [mode, setMode] = useState<'signup' | 'signin'>('signin');
@@ -132,9 +100,11 @@ export default function Auth() {
 
           {/* Learning Illustration */}
           <div className="mb-8">
-            <img 
+            <Image 
               src="/learning-illustration.png" 
               alt="Person learning with laptop" 
+              width={400}
+              height={256}
               className="w-full h-64 object-contain"
             />
           </div>
